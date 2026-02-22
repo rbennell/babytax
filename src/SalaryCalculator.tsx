@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, LogOut, Calculator, Calendar, CheckCircle2 } from "lucide-react";
+import { Plus, Trash2, LogOut, Calculator, Calendar, CheckCircle2, Baby, Info, ArrowRight } from "lucide-react";
 
 interface AuthState {
   token: string | null;
@@ -61,9 +61,16 @@ interface IncomeState {
   yearlyData: Record<string, YearlyIncomeData>;
 }
 
-interface ChildcareData {
-  costPerDay: number;
+interface ChildcareChild {
+  id: string;
+  name: string;
   daysPerWeek: number;
+  dailyCost: number;
+  topUpCost: number;
+}
+
+interface ChildcareData {
+  children: ChildcareChild[];
 }
 
 const TAX_YEARS = ["2022/23", "2023/24", "2024/25", "2025/26", "2026/27"];
@@ -165,8 +172,7 @@ export function SalaryCalculator() {
     initialIncomeState("Person 2"),
   );
   const [childcare, setChildcare] = useState<ChildcareData>({
-    costPerDay: 0,
-    daysPerWeek: 0,
+    children: [],
   });
 
   const fetchData = async () => {
@@ -263,7 +269,7 @@ export function SalaryCalculator() {
     setPerson1(initialIncomeState("Person 1"));
     setPerson2(initialIncomeState("Person 2"));
     setNumPeople(1);
-    setChildcare({ costPerDay: 0, daysPerWeek: 0 });
+    setChildcare({ children: [] });
   };
 
   const getYearlyData = (person: IncomeState, year: string) => {
@@ -337,8 +343,15 @@ export function SalaryCalculator() {
     };
   };
 
-  const calculateUKNetIncome = (person: IncomeState, year: string) => {
-    const data = getYearlyData(person, year);
+  const calculateUKNetIncome = (person: IncomeState, year: string, targetAdjustedNet?: number) => {
+    const originalData = getYearlyData(person, year);
+    
+    // If targetAdjustedNet is provided, we simulate what the income tax/NI would be
+    // This is a simplified simulation for the "what if" analysis
+    const data = targetAdjustedNet !== undefined 
+      ? { ...originalData, baseSalary: targetAdjustedNet } // This is just for thresholds, not 100% accurate for NI
+      : originalData;
+
     const config = TAX_YEAR_CONFIG[year] || TAX_YEAR_CONFIG[DEFAULT_YEAR];
     const totalGross = calculateTotalGross(data);
     const pensionInfo = calculateYearlyPensionContribution(data);
@@ -430,11 +443,69 @@ export function SalaryCalculator() {
   const p2Details = calculateUKNetIncome(person2, selectedYear);
   const THRESHOLD = 100000;
 
-  const totalTakeHome =
-    p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
-  const weeklyChildcare = childcare.costPerDay * childcare.daysPerWeek;
-  const yearlyChildcare = weeklyChildcare * 52;
-  const netAfterChildcare = totalTakeHome - yearlyChildcare;
+  const isEligibleForFreeChildcare = p1Details.adjustedNetIncome <= THRESHOLD && (numPeople === 1 || p2Details.adjustedNetIncome <= THRESHOLD);
+
+  const childcareCosts = useMemo(() => {
+    let totalFullYear = 0;
+    let totalWithFreeHours = 0;
+
+    childcare.children.forEach(child => {
+      const weeklyFull = child.daysPerWeek * child.dailyCost;
+      const weeklyFree = child.daysPerWeek * child.topUpCost;
+      
+      const yearlyFull = weeklyFull * 52;
+      // 30 hours (approx 3 days) free for 38 weeks
+      // We assume if daysPerWeek <= 3, they only pay topUp for 38 weeks.
+      // If > 3, they pay (topUp for 3 days + full for remaining days) for 38 weeks.
+      const dailyFreeHoursEquivalent = 3; 
+      const freeDays = Math.min(child.daysPerWeek, dailyFreeHoursEquivalent);
+      const paidDays = Math.max(0, child.daysPerWeek - dailyFreeHoursEquivalent);
+      
+      const weeklyDuringTerm = (freeDays * child.topUpCost) + (paidDays * child.dailyCost);
+      const yearlyWithFree = (weeklyDuringTerm * 38) + (weeklyFull * 14);
+
+      totalFullYear += yearlyFull;
+      totalWithFreeHours += yearlyWithFree;
+    });
+
+    return {
+      full: totalFullYear,
+      withFree: totalWithFreeHours,
+      actual: isEligibleForFreeChildcare ? totalWithFreeHours : totalFullYear,
+      savings: totalFullYear - totalWithFreeHours
+    };
+  }, [childcare.children, isEligibleForFreeChildcare]);
+
+  const totalTakeHome = p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
+  const netAfterChildcare = totalTakeHome - childcareCosts.actual;
+
+  // Savings Analysis Logic
+  const savingsAnalysis = useMemo(() => {
+    const analyzePerson = (person: IncomeState, details: any) => {
+      if (details.adjustedNetIncome <= THRESHOLD) return null;
+      
+      const sacrificeNeeded = details.adjustedNetIncome - THRESHOLD;
+      // We simulate sacrificing exactly down to 100k
+      const simulatedDetails = calculateUKNetIncome(person, selectedYear, THRESHOLD);
+      
+      const taxSaved = (details.incomeTax + details.ni) - (simulatedDetails.incomeTax + simulatedDetails.ni);
+      const takeHomeLoss = details.netIncome - simulatedDetails.netIncome;
+      
+      return {
+        sacrificeNeeded,
+        taxSaved,
+        takeHomeLoss,
+        simulatedDetails
+      };
+    };
+
+    const p1Analysis = analyzePerson(person1, p1Details);
+    const p2Analysis = numPeople === 2 ? analyzePerson(person2, p2Details) : null;
+
+    const potentialChildcareSaving = (!isEligibleForFreeChildcare && (p1Analysis || p2Analysis)) ? childcareCosts.savings : 0;
+    
+    return { p1Analysis, p2Analysis, potentialChildcareSaving };
+  }, [person1, person2, p1Details, p2Details, numPeople, selectedYear, isEligibleForFreeChildcare, childcareCosts.savings]);
 
   if (!auth.token) {
     return (
@@ -493,6 +564,27 @@ export function SalaryCalculator() {
     );
   }
 
+  const addChild = () => {
+    setChildcare(prev => ({
+      children: [
+        ...prev.children,
+        { id: crypto.randomUUID(), name: `Child ${prev.children.length + 1}`, daysPerWeek: 0, dailyCost: 0, topUpCost: 0 }
+      ]
+    }));
+  };
+
+  const updateChild = (id: string, updates: Partial<ChildcareChild>) => {
+    setChildcare(prev => ({
+      children: prev.children.map(c => c.id === id ? { ...c, ...updates } : c)
+    }));
+  };
+
+  const removeChild = (id: string) => {
+    setChildcare(prev => ({
+      children: prev.children.filter(c => c.id !== id)
+    }));
+  };
+
   return (
     <div className="space-y-8 max-w-6xl mx-auto px-4 pb-20">
       <div className="flex flex-col md:flex-row items-center justify-between bg-muted/30 p-4 rounded-lg gap-4">
@@ -547,69 +639,155 @@ export function SalaryCalculator() {
       </div>
 
       <div className="grid gap-8 grid-cols-1 md:grid-cols-3">
-        <div className={`md:col-span-2 grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
-          <PersonForm
-            personNum={1}
-            name={person1.name}
-            onNameChange={(name) => updatePersonName(1, name)}
-            yearlyData={getYearlyData(person1, selectedYear)}
-            onUpdate={(updates) => updateYearlyData(1, selectedYear, updates)}
-            details={p1Details}
-            year={selectedYear}
-          />
-          {numPeople === 2 && (
+        <div className="md:col-span-2 grid gap-8">
+          <div className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
             <PersonForm
-              personNum={2}
-              name={person2.name}
-              onNameChange={(name) => updatePersonName(2, name)}
-              yearlyData={getYearlyData(person2, selectedYear)}
-              onUpdate={(updates) => updateYearlyData(2, selectedYear, updates)}
-              details={p2Details}
+              personNum={1}
+              name={person1.name}
+              onNameChange={(name) => updatePersonName(1, name)}
+              yearlyData={getYearlyData(person1, selectedYear)}
+              onUpdate={(updates) => updateYearlyData(1, selectedYear, updates)}
+              details={p1Details}
               year={selectedYear}
             />
+            {numPeople === 2 && (
+              <PersonForm
+                personNum={2}
+                name={person2.name}
+                onNameChange={(name) => updatePersonName(2, name)}
+                yearlyData={getYearlyData(person2, selectedYear)}
+                onUpdate={(updates) => updateYearlyData(2, selectedYear, updates)}
+                details={p2Details}
+                year={selectedYear}
+              />
+            )}
+          </div>
+
+          {(savingsAnalysis.p1Analysis || savingsAnalysis.p2Analysis) && (
+            <Card className="border-2 border-amber-500/50 bg-amber-50/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Info className="h-5 w-5 text-amber-600" />
+                  Threshold Savings Analysis
+                </CardTitle>
+                <CardDescription>How much could you save by sacrificing below £100k?</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[
+                    { analysis: savingsAnalysis.p1Analysis, name: person1.name },
+                    { analysis: savingsAnalysis.p2Analysis, name: person2.name }
+                  ].map((item, idx) => item.analysis && (
+                    <div key={idx} className="p-4 bg-white rounded-lg border border-amber-200 space-y-3 text-sm">
+                      <h4 className="font-bold border-b pb-1">{item.name}</h4>
+                      <div className="flex justify-between">
+                        <span>Sacrifice needed:</span>
+                        <span className="font-semibold text-amber-700">£{item.analysis.sacrificeNeeded.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tax/NI Saved:</span>
+                        <span className="font-semibold text-green-600">+£{item.analysis.taxSaved.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Take-home Reduction:</span>
+                        <span className="font-semibold text-destructive">-£{item.analysis.takeHomeLoss.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">
+                  <h4 className="font-bold text-green-800 flex items-center gap-2">
+                    <Baby className="h-4 w-4" /> Childcare Benefit
+                  </h4>
+                  <div className="flex justify-between items-center">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Estimated Childcare Savings:</p>
+                      <p className="text-xs text-muted-foreground">From 30 free hours (38 weeks/year)</p>
+                    </div>
+                    <span className="text-2xl font-extrabold text-green-600">
+                      £{childcareCosts.savings.toLocaleString()}
+                    </span>
+                  </div>
+                  
+                  <div className="pt-4 border-t border-green-200">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-lg">Net Yearly Gain:</span>
+                      <span className="text-2xl font-black text-primary">
+                        £{((savingsAnalysis.p1Analysis?.taxSaved || 0) + (savingsAnalysis.p2Analysis?.taxSaved || 0) + childcareCosts.savings - ((savingsAnalysis.p1Analysis?.takeHomeLoss || 0) + (savingsAnalysis.p2Analysis?.takeHomeLoss || 0))).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-2 italic">
+                      Combined tax savings + free childcare benefit - reduction in base take-home pay.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
 
         <div className="space-y-8">
           <Card>
-            <CardHeader>
-              <CardTitle>Childcare Calculator</CardTitle>
-              <CardDescription>Estimate monthly/yearly costs</CardDescription>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <div className="space-y-1">
+                <CardTitle>Childcare</CardTitle>
+                <CardDescription>Manage costs per child</CardDescription>
+              </div>
+              <Button variant="outline" size="icon" onClick={addChild}>
+                <Plus className="h-4 w-4" />
+              </Button>
             </CardHeader>
             <CardContent className="space-y-4 text-left">
-              <div className="space-y-2">
-                <Label>Cost per Day (£)</Label>
-                <Input
-                  type="number"
-                  value={childcare.costPerDay || ""}
-                  onChange={(e) => setChildcare({ ...childcare, costPerDay: Number(e.target.value) })}
-                  placeholder="e.g. 70"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Days per Week</Label>
-                <Select
-                  value={String(childcare.daysPerWeek)}
-                  onValueChange={(v) => setChildcare({ ...childcare, daysPerWeek: Number(v) })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select days" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[0, 1, 2, 3, 4, 5].map((d) => (
-                      <SelectItem key={d} value={String(d)}>{d} Days</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="pt-4 border-t space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Weekly Cost:</span>
-                  <span className="font-semibold">£{weeklyChildcare.toLocaleString()}</span>
+              {childcare.children.length === 0 && (
+                <p className="text-sm text-muted-foreground italic text-center py-4">No children added. Click + to add.</p>
+              )}
+              {childcare.children.map((child) => (
+                <div key={child.id} className="space-y-3 p-3 bg-muted/30 rounded-lg border border-border relative group">
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => removeChild(child.id)}
+                  >
+                    <Trash2 className="h-3 w-3 text-destructive" />
+                  </Button>
+                  <Input 
+                    className="h-7 text-xs font-bold bg-transparent border-none p-0 focus-visible:ring-0" 
+                    value={child.name} 
+                    onChange={(e) => updateChild(child.id, { name: e.target.value })}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Days/Week</Label>
+                      <Input type="number" className="h-8 text-xs" value={child.daysPerWeek || ""} onChange={(e) => updateChild(child.id, { daysPerWeek: Number(e.target.value) })} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Daily Cost (£)</Label>
+                      <Input type="number" className="h-8 text-xs" value={child.dailyCost || ""} onChange={(e) => updateChild(child.id, { dailyCost: Number(e.target.value) })} />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Top-up Cost per Day (£)</Label>
+                    <Input type="number" className="h-8 text-xs" value={child.topUpCost || ""} onChange={(e) => updateChild(child.id, { topUpCost: Number(e.target.value) })} />
+                  </div>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Yearly Cost:</span>
-                  <span className="font-bold text-destructive">£{yearlyChildcare.toLocaleString()}</span>
+              ))}
+              
+              <div className="pt-4 border-t space-y-2">
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Full Yearly Cost:</span>
+                  <span className="line-through text-muted-foreground/60">£{childcareCosts.full.toLocaleString()}</span>
+                </div>
+                {isEligibleForFreeChildcare && (
+                  <div className="flex justify-between text-xs text-green-600 font-medium">
+                    <span>Free Childcare Benefit:</span>
+                    <span>-£{childcareCosts.savings.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-bold">
+                  <span>Estimated Actual Cost:</span>
+                  <span className="text-destructive">£{childcareCosts.actual.toLocaleString()}</span>
                 </div>
               </div>
             </CardContent>
@@ -617,28 +795,25 @@ export function SalaryCalculator() {
 
           <Card className="border-2 border-primary/20 bg-primary/5">
             <CardHeader>
-              <CardTitle>Combined Summary</CardTitle>
-              <CardDescription>Total household finances</CardDescription>
+              <CardTitle>Household Net</CardTitle>
+              <CardDescription>Take-home after all costs</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-left">
               <div className="space-y-3">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Combined Take-home:</span>
+                  <span className="text-muted-foreground text-sm">Combined Take-home:</span>
                   <span className="font-bold text-green-600">£{totalTakeHome.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Childcare Costs:</span>
-                  <span className="font-bold text-destructive">- £{yearlyChildcare.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  <span className="text-muted-foreground text-sm">Childcare Costs:</span>
+                  <span className="font-bold text-destructive">- £{childcareCosts.actual.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                 </div>
                 <div className="pt-4 border-t flex justify-between items-center">
-                  <span className="font-bold">Net After Childcare:</span>
+                  <span className="font-bold">Disposable:</span>
                   <span className="font-extrabold text-2xl text-primary">
                     £{netAfterChildcare.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                 </div>
-                <p className="text-[10px] text-muted-foreground italic text-center pt-2">
-                  This is your total household take-home pay after tax, NI, and childcare costs.
-                </p>
               </div>
             </CardContent>
           </Card>
