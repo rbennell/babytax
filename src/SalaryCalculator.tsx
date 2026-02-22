@@ -24,6 +24,19 @@ interface SavingsAccount {
   interestRate: number;
 }
 
+interface SalarySacrifice {
+  id: string;
+  name: string;
+  amount: number;
+  type: "pension" | "ev" | "charity" | "other";
+}
+
+interface PensionHistory {
+  year: string;
+  contribution: number;
+  allowance: number;
+}
+
 interface IncomeState {
   name: string;
   baseSalary: number;
@@ -32,7 +45,11 @@ interface IncomeState {
   employeePensionPercent: number;
   employerPensionPercent: number;
   savings: SavingsAccount[];
+  sacrifices: SalarySacrifice[];
+  pensionHistory: PensionHistory[];
 }
+
+const previousYears = ["2023/24", "2022/23", "2021/22"];
 
 const initialIncomeState = (defaultName: string): IncomeState => ({
   name: defaultName,
@@ -42,6 +59,12 @@ const initialIncomeState = (defaultName: string): IncomeState => ({
   employeePensionPercent: 0,
   employerPensionPercent: 0,
   savings: [],
+  sacrifices: [],
+  pensionHistory: previousYears.map((year) => ({
+    year,
+    contribution: 0,
+    allowance: year === "2023/24" ? 60000 : 40000,
+  })),
 });
 
 export function SalaryCalculator() {
@@ -160,6 +183,78 @@ export function SalaryCalculator() {
     }
   };
 
+  const addSacrifice = (personNum: 1 | 2) => {
+    const newSacrifice: SalarySacrifice = {
+      id: crypto.randomUUID(),
+      name: "New Sacrifice",
+      amount: 0,
+      type: "other",
+    };
+    if (personNum === 1) {
+      setPerson1((prev) => ({
+        ...prev,
+        sacrifices: [...prev.sacrifices, newSacrifice],
+      }));
+    } else {
+      setPerson2((prev) => ({
+        ...prev,
+        sacrifices: [...prev.sacrifices, newSacrifice],
+      }));
+    }
+  };
+
+  const removeSacrifice = (personNum: 1 | 2, id: string) => {
+    if (personNum === 1) {
+      setPerson1((prev) => ({
+        ...prev,
+        sacrifices: prev.sacrifices.filter((s) => s.id !== id),
+      }));
+    } else {
+      setPerson2((prev) => ({
+        ...prev,
+        sacrifices: prev.sacrifices.filter((s) => s.id !== id),
+      }));
+    }
+  };
+
+  const updateSacrifice = (
+    personNum: 1 | 2,
+    id: string,
+    updates: Partial<Omit<SalarySacrifice, "id">>,
+  ) => {
+    const updater = (prev: IncomeState) => ({
+      ...prev,
+      sacrifices: prev.sacrifices.map((s) =>
+        s.id === id ? { ...s, ...updates } : s,
+      ),
+    });
+
+    if (personNum === 1) {
+      setPerson1(updater);
+    } else {
+      setPerson2(updater);
+    }
+  };
+
+  const updatePensionHistory = (
+    personNum: 1 | 2,
+    year: string,
+    contribution: number,
+  ) => {
+    const updater = (prev: IncomeState) => ({
+      ...prev,
+      pensionHistory: prev.pensionHistory.map((h) =>
+        h.year === year ? { ...h, contribution } : h,
+      ),
+    });
+
+    if (personNum === 1) {
+      setPerson1(updater);
+    } else {
+      setPerson2(updater);
+    }
+  };
+
   const calculateBonusAmount = (bonus: Bonus, baseSalary: number) => {
     if (bonus.type === "percentage") {
       return (baseSalary * bonus.value) / 100;
@@ -180,26 +275,44 @@ export function SalaryCalculator() {
     const employeePensionContribution =
       (person.baseSalary * person.employeePensionPercent) / 100;
 
-    // Taxable income is Gross minus employee pension (assuming net pay arrangement)
-    const taxableIncome = totalGross - employeePensionContribution;
+    // Salary sacrifices (Pension, EV, etc.) reduce taxable income and NI
+    const salarySacrifices = person.sacrifices
+      .filter((s) => s.type !== "charity")
+      .reduce((sum, s) => sum + s.amount, 0);
 
-    // 2024/25 UK Tax Rules (Standard Personal Allowance)
+    // Gift Aid donations (grossed up by 1.25 for tax relief and ANI reduction)
+    const giftAidRaw = person.sacrifices
+      .filter((s) => s.type === "charity")
+      .reduce((sum, s) => sum + s.amount, 0);
+    const giftAidGrossedUp = giftAidRaw * 1.25;
+
+    // Taxable income (Salary sacrifice is pre-tax)
+    const taxableIncome =
+      totalGross - employeePensionContribution - salarySacrifices;
+
+    // Adjusted Net Income (ANI) for Childcare/Personal Allowance taper
+    // ANI = Taxable Income - Gift Aid (grossed up)
+    const adjustedNetIncome = taxableIncome - giftAidGrossedUp;
+
+    // 2024/25 UK Tax Rules
     let personalAllowance = 12570;
 
-    // Personal allowance reduction for income over £100,000
-    if (taxableIncome > 100000) {
+    // Personal allowance taper: reduce by £1 for every £2 over £100,000 ANI
+    if (adjustedNetIncome > 100000) {
       const reduction = Math.min(
         personalAllowance,
-        (taxableIncome - 100000) / 2,
+        (adjustedNetIncome - 100000) / 2,
       );
       personalAllowance -= reduction;
     }
 
+    // Tax band extensions (Gift Aid and SIPP/Personal Pension extend the basic rate band)
+    const bandExtension = giftAidGrossedUp;
+    const basicRateLimit = 37700 + bandExtension;
+    const higherRateLimit = 125140 + bandExtension;
+
     let incomeTax = 0;
     if (taxableIncome > personalAllowance) {
-      const basicRateLimit = 37700;
-      const higherRateLimit = 125140;
-
       // Basic Rate (20%)
       const basicRateIncome = Math.min(
         taxableIncome - personalAllowance,
@@ -210,8 +323,8 @@ export function SalaryCalculator() {
       // Higher Rate (40%)
       if (taxableIncome > personalAllowance + basicRateLimit) {
         const higherRateIncome = Math.min(
-          taxableIncome - personalAllowance - basicRateLimit,
-          higherRateLimit - basicRateLimit - 12570,
+          taxableIncome - (personalAllowance + basicRateLimit),
+          higherRateLimit - (personalAllowance + basicRateLimit),
         );
         incomeTax += higherRateIncome * 0.4;
 
@@ -223,31 +336,51 @@ export function SalaryCalculator() {
       }
     }
 
-    // National Insurance (Class 1) - 2024/25 rates
-    // Primary Threshold: £12,570, Upper Earnings Limit: £50,270
-    // Rates: 8% between PT and UEL, 2% above UEL (Effective April 2024)
+    // National Insurance (Class 1) - 2024/25 rates (8% and 2%)
     let ni = 0;
     const pt = 12570;
     const uel = 50270;
+    const niableIncome = totalGross - salarySacrifices;
 
-    if (totalGross > pt) {
-      const lowerBandNI = Math.min(totalGross - pt, uel - pt);
+    if (niableIncome > pt) {
+      const lowerBandNI = Math.min(niableIncome - pt, uel - pt);
       ni += lowerBandNI * 0.08;
 
-      if (totalGross > uel) {
-        const upperBandNI = totalGross - uel;
+      if (niableIncome > uel) {
+        const upperBandNI = niableIncome - uel;
         ni += upperBandNI * 0.02;
       }
     }
 
+    // Pension Allowance Tracking
+    const currentYearPensionSacrifice = person.sacrifices
+      .filter((s) => s.type === "pension")
+      .reduce((sum, s) => sum + s.amount, 0);
+
+    const currentYearTotalContribution =
+      employeePensionContribution +
+      (person.baseSalary * person.employerPensionPercent) / 100 +
+      currentYearPensionSacrifice;
+
+    const carryForward = person.pensionHistory.reduce(
+      (sum, h) => sum + Math.max(0, h.allowance - h.contribution),
+      0,
+    );
+
+    const totalAllowanceAvailable = 60000 + carryForward;
+
     return {
-      netIncome: taxableIncome - incomeTax - ni,
+      netIncome: taxableIncome - incomeTax - ni - giftAidRaw,
       incomeTax,
       ni,
       employeePension: employeePensionContribution,
       employerPension:
         (person.baseSalary * person.employerPensionPercent) / 100,
-      taxableIncome,
+      adjustedNetIncome,
+      currentYearContribution: currentYearTotalContribution,
+      totalAllowanceAvailable,
+      pensionExceeded: currentYearTotalContribution > totalAllowanceAvailable,
+      carryForward,
     };
   };
 
@@ -260,8 +393,8 @@ export function SalaryCalculator() {
 
   const p1Details = calculateUKNetIncome(person1);
   const p2Details = calculateUKNetIncome(person2);
-  const p1Adjusted = p1Details.taxableIncome; // Adjusted net income is roughly taxable income after pension
-  const p2Adjusted = p2Details.taxableIncome;
+  const p1Adjusted = p1Details.adjustedNetIncome;
+  const p2Adjusted = p2Details.adjustedNetIncome;
   const p1Interest = calculateSavingsInterest(person1);
   const p2Interest = calculateSavingsInterest(person2);
 
@@ -297,6 +430,12 @@ export function SalaryCalculator() {
           addSavings={() => addSavings(1)}
           removeSavings={(id) => removeSavings(1, id)}
           updateSavings={(id, updates) => updateSavings(1, id, updates)}
+          addSacrifice={() => addSacrifice(1)}
+          removeSacrifice={(id) => removeSacrifice(1, id)}
+          updateSacrifice={(id, updates) => updateSacrifice(1, id, updates)}
+          updatePensionHistory={(year, val) =>
+            updatePensionHistory(1, year, val)
+          }
           calculateBonusAmount={(b) =>
             calculateBonusAmount(b, person1.baseSalary)
           }
@@ -314,6 +453,12 @@ export function SalaryCalculator() {
             addSavings={() => addSavings(2)}
             removeSavings={(id) => removeSavings(2, id)}
             updateSavings={(id, updates) => updateSavings(2, id, updates)}
+            addSacrifice={() => addSacrifice(2)}
+            removeSacrifice={(id) => removeSacrifice(2, id)}
+            updateSacrifice={(id, updates) => updateSacrifice(2, id, updates)}
+            updatePensionHistory={(year, val) =>
+              updatePensionHistory(2, year, val)
+            }
             calculateBonusAmount={(b) =>
               calculateBonusAmount(b, person2.baseSalary)
             }
@@ -447,14 +592,37 @@ function SummarySection({
           </div>
         </div>
 
-        <div className="pt-2 border-t">
+        <div className="pt-2 space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Est. Annual Interest:</span>
-            <span className="font-semibold">
+            <span className="text-muted-foreground">
+              Annual Pension Utilised:
+            </span>
+            <span
+              className={`font-semibold ${details.pensionExceeded ? "text-destructive" : "text-blue-600"}`}
+            >
               £
-              {interest.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {details.currentYearContribution.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
             </span>
           </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>Current Year (24/25):</span>
+            <span>£60,000</span>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>Carry Forward:</span>
+            <span>+ £{details.carryForward.toLocaleString()}</span>
+          </div>
+          <div className="flex justify-between text-xs font-semibold pt-1 border-t">
+            <span>Total Available:</span>
+            <span>£{details.totalAllowanceAvailable.toLocaleString()}</span>
+          </div>
+          {details.pensionExceeded && (
+            <p className="text-[10px] text-destructive font-bold text-right pt-1">
+              ⚠️ EXCEEDS TOTAL ALLOWANCE
+            </p>
+          )}
         </div>
 
         <div className="mt-4 pt-4 border-t border-dashed">
@@ -489,6 +657,13 @@ interface PersonFormProps {
     id: string,
     updates: Partial<Omit<SavingsAccount, "id">>,
   ) => void;
+  addSacrifice: () => void;
+  removeSacrifice: (id: string) => void;
+  updateSacrifice: (
+    id: string,
+    updates: Partial<Omit<SalarySacrifice, "id">>,
+  ) => void;
+  updatePensionHistory: (year: string, contribution: number) => void;
   calculateBonusAmount: (bonus: Bonus) => number;
   details: any;
   interest: number;
@@ -504,6 +679,10 @@ function PersonForm({
   addSavings,
   removeSavings,
   updateSavings,
+  addSacrifice,
+  removeSacrifice,
+  updateSacrifice,
+  updatePensionHistory,
   calculateBonusAmount,
   details,
   interest,
@@ -519,7 +698,7 @@ function PersonForm({
             placeholder="Person's Name"
           />
         </div>
-        <CardDescription>Income & Savings details</CardDescription>
+        <CardDescription>Income, Sacrifices & Savings</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6 text-left">
         <div className="space-y-2">
@@ -596,7 +775,7 @@ function PersonForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label>Employee Pension (%)</Label>
+            <Label>Workplace Pension (%)</Label>
             <Input
               type="number"
               value={state.employeePensionPercent || ""}
@@ -616,6 +795,107 @@ function PersonForm({
               }
               placeholder="e.g. 3"
             />
+          </div>
+        </div>
+
+        <div className="space-y-4 border-t pt-4">
+          <div className="flex items-center justify-between">
+            <Label className="text-base font-semibold">
+              Salary Sacrifices & Donations
+            </Label>
+            <Button variant="outline" size="sm" onClick={addSacrifice}>
+              <Plus className="h-4 w-4 mr-1" /> Add
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground italic">
+            Include EV lease, Cycle to work, SIPP, or Gift Aid.
+          </p>
+          {state.sacrifices.map((s) => (
+            <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex gap-2 mb-2">
+                <Input
+                  className="flex-1 bg-transparent"
+                  value={s.name}
+                  onChange={(e) =>
+                    updateSacrifice(s.id, { name: e.target.value })
+                  }
+                  placeholder="e.g. Electric Car"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeSacrifice(s.id)}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1 space-y-1">
+                  <Label className="text-xs">Annual Amount (£)</Label>
+                  <Input
+                    type="number"
+                    value={s.amount || ""}
+                    onChange={(e) =>
+                      updateSacrifice(s.id, { amount: Number(e.target.value) })
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div className="w-32 space-y-1">
+                  <Label className="text-xs">Type</Label>
+                  <select
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={s.type}
+                    onChange={(e) =>
+                      updateSacrifice(s.id, { type: e.target.value as any })
+                    }
+                  >
+                    <option value="other">General</option>
+                    <option value="pension">Pension/SIPP</option>
+                    <option value="ev">Electric Car</option>
+                    <option value="charity">Gift Aid</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-4 border-t pt-4">
+          <Label className="text-base font-semibold">
+            Pension Carry Forward
+          </Label>
+          <p className="text-[10px] text-muted-foreground italic">
+            Enter total contributions in previous years to calculate available
+            allowance.
+          </p>
+          <div className="grid grid-cols-1 gap-3">
+            {state.pensionHistory.map((h) => (
+              <div
+                key={h.year}
+                className="flex items-center gap-4 p-2 bg-muted/20 rounded"
+              >
+                <span className="text-sm font-medium w-20">{h.year}</span>
+                <div className="flex-1 space-y-1">
+                  <Label className="text-[10px]">Total Contributed (£)</Label>
+                  <Input
+                    type="number"
+                    className="h-8"
+                    value={h.contribution || ""}
+                    onChange={(e) =>
+                      updatePensionHistory(h.year, Number(e.target.value) || 0)
+                    }
+                    placeholder="0"
+                  />
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-muted-foreground">Allowance</p>
+                  <p className="text-xs font-semibold">
+                    £{h.allowance.toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
