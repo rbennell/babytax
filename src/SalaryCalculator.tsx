@@ -17,26 +17,41 @@ interface Bonus {
   value: number;
 }
 
+interface SavingsAccount {
+  id: string;
+  name: string;
+  balance: number;
+  interestRate: number;
+}
+
 interface IncomeState {
+  name: string;
   baseSalary: number;
   bonuses: Bonus[];
   carAllowance: number;
   employeePensionPercent: number;
   employerPensionPercent: number;
+  savings: SavingsAccount[];
 }
 
-const initialIncomeState: IncomeState = {
+const initialIncomeState = (defaultName: string): IncomeState => ({
+  name: defaultName,
   baseSalary: 0,
   bonuses: [],
   carAllowance: 0,
   employeePensionPercent: 0,
   employerPensionPercent: 0,
-};
+  savings: [],
+});
 
 export function SalaryCalculator() {
   const [numPeople, setNumPeople] = useState<1 | 2>(1);
-  const [person1, setPerson1] = useState<IncomeState>(initialIncomeState);
-  const [person2, setPerson2] = useState<IncomeState>(initialIncomeState);
+  const [person1, setPerson1] = useState<IncomeState>(
+    initialIncomeState("Person 1"),
+  );
+  const [person2, setPerson2] = useState<IncomeState>(
+    initialIncomeState("Person 2"),
+  );
 
   const updatePerson = (personNum: 1 | 2, updates: Partial<IncomeState>) => {
     if (personNum === 1) {
@@ -92,6 +107,59 @@ export function SalaryCalculator() {
     }
   };
 
+  const addSavings = (personNum: 1 | 2) => {
+    const newSavings: SavingsAccount = {
+      id: crypto.randomUUID(),
+      name: "New Account",
+      balance: 0,
+      interestRate: 0,
+    };
+    if (personNum === 1) {
+      setPerson1((prev) => ({
+        ...prev,
+        savings: [...prev.savings, newSavings],
+      }));
+    } else {
+      setPerson2((prev) => ({
+        ...prev,
+        savings: [...prev.savings, newSavings],
+      }));
+    }
+  };
+
+  const removeSavings = (personNum: 1 | 2, id: string) => {
+    if (personNum === 1) {
+      setPerson1((prev) => ({
+        ...prev,
+        savings: prev.savings.filter((s) => s.id !== id),
+      }));
+    } else {
+      setPerson2((prev) => ({
+        ...prev,
+        savings: prev.savings.filter((s) => s.id !== id),
+      }));
+    }
+  };
+
+  const updateSavings = (
+    personNum: 1 | 2,
+    id: string,
+    updates: Partial<Omit<SavingsAccount, "id">>,
+  ) => {
+    const updater = (prev: IncomeState) => ({
+      ...prev,
+      savings: prev.savings.map((s) =>
+        s.id === id ? { ...s, ...updates } : s,
+      ),
+    });
+
+    if (personNum === 1) {
+      setPerson1(updater);
+    } else {
+      setPerson2(updater);
+    }
+  };
+
   const calculateBonusAmount = (bonus: Bonus, baseSalary: number) => {
     if (bonus.type === "percentage") {
       return (baseSalary * bonus.value) / 100;
@@ -107,24 +175,100 @@ export function SalaryCalculator() {
     return person.baseSalary + totalBonuses + person.carAllowance;
   };
 
-  const calculateAdjustedNetIncome = (person: IncomeState) => {
+  const calculateUKNetIncome = (person: IncomeState) => {
     const totalGross = calculateTotal(person);
     const employeePensionContribution =
       (person.baseSalary * person.employeePensionPercent) / 100;
-    // Adjusted Net Income for childcare is usually Gross - Pension (Net of tax relief)
-    // Note: Gift aid could also be subtracted here, but starting with pension
-    return totalGross - employeePensionContribution;
+
+    // Taxable income is Gross minus employee pension (assuming net pay arrangement)
+    const taxableIncome = totalGross - employeePensionContribution;
+
+    // 2024/25 UK Tax Rules (Standard Personal Allowance)
+    let personalAllowance = 12570;
+
+    // Personal allowance reduction for income over £100,000
+    if (taxableIncome > 100000) {
+      const reduction = Math.min(
+        personalAllowance,
+        (taxableIncome - 100000) / 2,
+      );
+      personalAllowance -= reduction;
+    }
+
+    let incomeTax = 0;
+    if (taxableIncome > personalAllowance) {
+      const basicRateLimit = 37700;
+      const higherRateLimit = 125140;
+
+      // Basic Rate (20%)
+      const basicRateIncome = Math.min(
+        taxableIncome - personalAllowance,
+        basicRateLimit,
+      );
+      incomeTax += basicRateIncome * 0.2;
+
+      // Higher Rate (40%)
+      if (taxableIncome > personalAllowance + basicRateLimit) {
+        const higherRateIncome = Math.min(
+          taxableIncome - personalAllowance - basicRateLimit,
+          higherRateLimit - basicRateLimit - 12570,
+        );
+        incomeTax += higherRateIncome * 0.4;
+
+        // Additional Rate (45%)
+        if (taxableIncome > higherRateLimit) {
+          const additionalRateIncome = taxableIncome - higherRateLimit;
+          incomeTax += additionalRateIncome * 0.45;
+        }
+      }
+    }
+
+    // National Insurance (Class 1) - 2024/25 rates
+    // Primary Threshold: £12,570, Upper Earnings Limit: £50,270
+    // Rates: 8% between PT and UEL, 2% above UEL (Effective April 2024)
+    let ni = 0;
+    const pt = 12570;
+    const uel = 50270;
+
+    if (totalGross > pt) {
+      const lowerBandNI = Math.min(totalGross - pt, uel - pt);
+      ni += lowerBandNI * 0.08;
+
+      if (totalGross > uel) {
+        const upperBandNI = totalGross - uel;
+        ni += upperBandNI * 0.02;
+      }
+    }
+
+    return {
+      netIncome: taxableIncome - incomeTax - ni,
+      incomeTax,
+      ni,
+      employeePension: employeePensionContribution,
+      employerPension:
+        (person.baseSalary * person.employerPensionPercent) / 100,
+      taxableIncome,
+    };
   };
 
-  const p1Total = calculateTotal(person1);
-  const p1Adjusted = calculateAdjustedNetIncome(person1);
-  const p2Total = calculateTotal(person2);
-  const p2Adjusted = calculateAdjustedNetIncome(person2);
+  const calculateSavingsInterest = (person: IncomeState) => {
+    return person.savings.reduce(
+      (sum, s) => sum + (s.balance * s.interestRate) / 100,
+      0,
+    );
+  };
+
+  const p1Details = calculateUKNetIncome(person1);
+  const p2Details = calculateUKNetIncome(person2);
+  const p1Adjusted = p1Details.taxableIncome; // Adjusted net income is roughly taxable income after pension
+  const p2Adjusted = p2Details.taxableIncome;
+  const p1Interest = calculateSavingsInterest(person1);
+  const p2Interest = calculateSavingsInterest(person2);
 
   const THRESHOLD = 100000;
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-8 max-w-6xl mx-auto px-4">
       <div className="flex justify-center gap-4 mb-6">
         <Button
           variant={numPeople === 1 ? "default" : "outline"}
@@ -141,34 +285,40 @@ export function SalaryCalculator() {
       </div>
 
       <div
-        className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}
+        className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
       >
         <PersonForm
-          title="Person 1"
+          title={person1.name || "Person 1"}
           state={person1}
           update={(u) => updatePerson(1, u)}
           addBonus={() => addBonus(1)}
           removeBonus={(id) => removeBonus(1, id)}
           updateBonus={(id, updates) => updateBonus(1, id, updates)}
+          addSavings={() => addSavings(1)}
+          removeSavings={(id) => removeSavings(1, id)}
+          updateSavings={(id, updates) => updateSavings(1, id, updates)}
           calculateBonusAmount={(b) =>
             calculateBonusAmount(b, person1.baseSalary)
           }
-          total={p1Total}
-          adjustedNet={p1Adjusted}
+          details={p1Details}
+          interest={p1Interest}
         />
         {numPeople === 2 && (
           <PersonForm
-            title="Person 2"
+            title={person2.name || "Person 2"}
             state={person2}
             update={(u) => updatePerson(2, u)}
             addBonus={() => addBonus(2)}
             removeBonus={(id) => removeBonus(2, id)}
             updateBonus={(id, updates) => updateBonus(2, id, updates)}
+            addSavings={() => addSavings(2)}
+            removeSavings={(id) => removeSavings(2, id)}
+            updateSavings={(id, updates) => updateSavings(2, id, updates)}
             calculateBonusAmount={(b) =>
               calculateBonusAmount(b, person2.baseSalary)
             }
-            total={p2Total}
-            adjustedNet={p2Adjusted}
+            details={p2Details}
+            interest={p2Interest}
           />
         )}
       </div>
@@ -180,50 +330,148 @@ export function SalaryCalculator() {
             Estimated adjusted net income vs £100,000 threshold
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div
-              className={`p-4 rounded-lg ${p1Adjusted > THRESHOLD ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
-            >
-              <h3 className="font-bold mb-1">Person 1</h3>
-              <p className="text-2xl font-bold">
-                £{p1Adjusted.toLocaleString()}
-              </p>
-              <p className="text-sm opacity-80">Adjusted Net Income</p>
-              {p1Adjusted > THRESHOLD ? (
-                <p className="mt-2 text-sm font-semibold text-destructive">
-                  Over threshold by £{(p1Adjusted - THRESHOLD).toLocaleString()}
-                </p>
-              ) : (
-                <p className="mt-2 text-sm font-semibold text-green-600">
-                  Under threshold
-                </p>
-              )}
-            </div>
+        <CardContent className="space-y-4 text-left">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <SummarySection
+              person={person1}
+              adjustedNet={p1Adjusted}
+              details={p1Details}
+              interest={p1Interest}
+              threshold={THRESHOLD}
+            />
             {numPeople === 2 && (
-              <div
-                className={`p-4 rounded-lg ${p2Adjusted > THRESHOLD ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
-              >
-                <h3 className="font-bold mb-1">Person 2</h3>
-                <p className="text-2xl font-bold">
-                  £{p2Adjusted.toLocaleString()}
-                </p>
-                <p className="text-sm opacity-80">Adjusted Net Income</p>
-                {p2Adjusted > THRESHOLD ? (
-                  <p className="mt-2 text-sm font-semibold text-destructive">
-                    Over threshold by £
-                    {(p2Adjusted - THRESHOLD).toLocaleString()}
-                  </p>
-                ) : (
-                  <p className="mt-2 text-sm font-semibold text-green-600">
-                    Under threshold
-                  </p>
-                )}
-              </div>
+              <SummarySection
+                person={person2}
+                adjustedNet={p2Adjusted}
+                details={p2Details}
+                interest={p2Interest}
+                threshold={THRESHOLD}
+              />
             )}
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function SummarySection({
+  person,
+  adjustedNet,
+  details,
+  interest,
+  threshold,
+}: any) {
+  return (
+    <div
+      className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
+    >
+      <h3 className="font-bold text-xl mb-4 border-b pb-2">
+        {person.name} Summary
+      </h3>
+
+      <div className="space-y-3">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Adjusted Net Income:</span>
+          <span className="font-bold">
+            £
+            {adjustedNet.toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}
+          </span>
+        </div>
+
+        <div className="flex justify-between text-sm">
+          <span className="text-muted-foreground italic">
+            Target for Childcare threshold
+          </span>
+        </div>
+
+        <div className="pt-4 border-t space-y-2">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Take-home Pay (Est.):</span>
+            <span className="font-bold text-green-600">
+              £
+              {details.netIncome.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>Income Tax:</span>
+            <span>
+              - £
+              {details.incomeTax.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>National Insurance:</span>
+            <span>
+              - £
+              {details.ni.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
+          </div>
+        </div>
+
+        <div className="pt-2 space-y-2">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Total Pension:</span>
+            <span className="font-semibold text-blue-600">
+              £
+              {(
+                details.employeePension + details.employerPension
+              ).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>Employee:</span>
+            <span>
+              £
+              {details.employeePension.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground pl-4">
+            <span>Employer:</span>
+            <span>
+              £
+              {details.employerPension.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Est. Annual Interest:</span>
+            <span className="font-semibold">
+              £
+              {interest.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-dashed">
+          {adjustedNet > threshold ? (
+            <p className="text-sm font-semibold text-destructive">
+              ⚠️ Over threshold by £
+              {(adjustedNet - threshold).toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </p>
+          ) : (
+            <p className="text-sm font-semibold text-green-600">
+              ✅ Under threshold
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -235,9 +483,15 @@ interface PersonFormProps {
   addBonus: () => void;
   removeBonus: (id: string) => void;
   updateBonus: (id: string, updates: Partial<Omit<Bonus, "id">>) => void;
+  addSavings: () => void;
+  removeSavings: (id: string) => void;
+  updateSavings: (
+    id: string,
+    updates: Partial<Omit<SavingsAccount, "id">>,
+  ) => void;
   calculateBonusAmount: (bonus: Bonus) => number;
-  total: number;
-  adjustedNet: number;
+  details: any;
+  interest: number;
 }
 
 function PersonForm({
@@ -247,21 +501,30 @@ function PersonForm({
   addBonus,
   removeBonus,
   updateBonus,
+  addSavings,
+  removeSavings,
+  updateSavings,
   calculateBonusAmount,
-  total,
-  adjustedNet,
+  details,
+  interest,
 }: PersonFormProps) {
   return (
     <Card className="w-full">
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>Enter income and pension details</CardDescription>
+        <div className="flex items-center gap-4">
+          <Input
+            className="text-2xl font-bold border-none p-0 focus-visible:ring-0 h-auto w-full"
+            value={state.name}
+            onChange={(e) => update({ name: e.target.value })}
+            placeholder="Person's Name"
+          />
+        </div>
+        <CardDescription>Income & Savings details</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6 text-left">
         <div className="space-y-2">
-          <Label htmlFor={`${title}-baseSalary`}>Base Salary (£)</Label>
+          <Label>Base Salary (£)</Label>
           <Input
-            id={`${title}-baseSalary`}
             type="number"
             value={state.baseSalary || ""}
             onChange={(e) => update({ baseSalary: Number(e.target.value) })}
@@ -322,9 +585,8 @@ function PersonForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor={`${title}-carAllowance`}>Car Allowance (£)</Label>
+          <Label>Car Allowance (£)</Label>
           <Input
-            id={`${title}-carAllowance`}
             type="number"
             value={state.carAllowance || ""}
             onChange={(e) => update({ carAllowance: Number(e.target.value) })}
@@ -334,9 +596,8 @@ function PersonForm({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor={`${title}-empPension`}>Employee Pension (%)</Label>
+            <Label>Employee Pension (%)</Label>
             <Input
-              id={`${title}-empPension`}
               type="number"
               value={state.employeePensionPercent || ""}
               onChange={(e) =>
@@ -346,11 +607,8 @@ function PersonForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor={`${title}-employerPension`}>
-              Employer Pension (%)
-            </Label>
+            <Label>Employer Pension (%)</Label>
             <Input
-              id={`${title}-employerPension`}
               type="number"
               value={state.employerPensionPercent || ""}
               onChange={(e) =>
@@ -361,15 +619,60 @@ function PersonForm({
           </div>
         </div>
 
-        <div className="pt-4 border-t space-y-2">
-          <div className="flex justify-between items-center text-sm text-muted-foreground">
-            <span>Gross Total:</span>
-            <span>£{total.toLocaleString()}</span>
+        <div className="space-y-4 border-t pt-4">
+          <div className="flex items-center justify-between">
+            <Label className="text-base font-semibold">Savings Accounts</Label>
+            <Button variant="outline" size="sm" onClick={addSavings}>
+              <Plus className="h-4 w-4 mr-1" /> Add Account
+            </Button>
           </div>
-          <div className="flex justify-between items-center font-bold text-lg">
-            <span>Adjusted Net Income:</span>
-            <span>£{adjustedNet.toLocaleString()}</span>
-          </div>
+          {state.savings.map((s) => (
+            <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex gap-2 mb-2">
+                <Input
+                  className="flex-1 bg-transparent"
+                  value={s.name}
+                  onChange={(e) =>
+                    updateSavings(s.id, { name: e.target.value })
+                  }
+                  placeholder="Account Name"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeSavings(s.id)}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1 space-y-1">
+                  <Label className="text-xs">Balance (£)</Label>
+                  <Input
+                    type="number"
+                    value={s.balance || ""}
+                    onChange={(e) =>
+                      updateSavings(s.id, { balance: Number(e.target.value) })
+                    }
+                    placeholder="Balance"
+                  />
+                </div>
+                <div className="w-24 space-y-1">
+                  <Label className="text-xs">Interest (%)</Label>
+                  <Input
+                    type="number"
+                    value={s.interestRate || ""}
+                    onChange={(e) =>
+                      updateSavings(s.id, {
+                        interestRate: Number(e.target.value),
+                      })
+                    }
+                    placeholder="Rate"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
