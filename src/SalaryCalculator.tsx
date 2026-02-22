@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, LogOut, Save, Calculator, Calendar } from "lucide-react";
+import { Plus, Trash2, LogOut, Calculator, Calendar, CheckCircle2 } from "lucide-react";
 
 interface AuthState {
   token: string | null;
@@ -27,6 +27,7 @@ const API_URL = "http://localhost:3001";
 
 interface Bonus {
   id: string;
+  name: string;
   type: "fixed" | "percentage";
   value: number;
 }
@@ -58,6 +59,11 @@ interface YearlyIncomeData {
 interface IncomeState {
   name: string;
   yearlyData: Record<string, YearlyIncomeData>;
+}
+
+interface ChildcareData {
+  costPerDay: number;
+  daysPerWeek: number;
 }
 
 const TAX_YEARS = ["2022/23", "2023/24", "2024/25", "2025/26", "2026/27"];
@@ -148,6 +154,7 @@ export function SalaryCalculator() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [authError, setAuthError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   const [numPeople, setNumPeople] = useState<1 | 2>(1);
   const [selectedYear, setSelectedYear] = useState<string>(DEFAULT_YEAR);
@@ -157,6 +164,10 @@ export function SalaryCalculator() {
   const [person2, setPerson2] = useState<IncomeState>(
     initialIncomeState("Person 2"),
   );
+  const [childcare, setChildcare] = useState<ChildcareData>({
+    costPerDay: 0,
+    daysPerWeek: 0,
+  });
 
   const fetchData = async () => {
     try {
@@ -166,6 +177,7 @@ export function SalaryCalculator() {
       const data = await res.json();
       if (data.id) {
         setNumPeople(data.numPeople);
+        if (data.childcareData) setChildcare(data.childcareData);
         const mergeData = (prev: IncomeState, newData: any) => ({
           ...prev,
           name: newData.name || prev.name,
@@ -183,6 +195,41 @@ export function SalaryCalculator() {
       console.error("Failed to fetch data", err);
     }
   };
+
+  const saveData = async () => {
+    if (!auth.token) return;
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/calculation`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({
+          numPeople,
+          person1Data: person1,
+          person2Data: numPeople === 2 ? person2 : null,
+          childcareData: childcare,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      setLastSaved(new Date());
+    } catch (err) {
+      console.error("Save failed", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Auto-save logic
+  useEffect(() => {
+    if (!auth.token) return;
+    const timer = setTimeout(() => {
+      saveData();
+    }, 2000); // 2 second debounce
+    return () => clearTimeout(timer);
+  }, [person1, person2, numPeople, childcare, auth.token]);
 
   useEffect(() => {
     if (auth.token) {
@@ -216,30 +263,7 @@ export function SalaryCalculator() {
     setPerson1(initialIncomeState("Person 1"));
     setPerson2(initialIncomeState("Person 2"));
     setNumPeople(1);
-  };
-
-  const saveData = async () => {
-    setIsSaving(true);
-    try {
-      const res = await fetch(`${API_URL}/api/calculation`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`,
-        },
-        body: JSON.stringify({
-          numPeople,
-          person1Data: person1,
-          person2Data: numPeople === 2 ? person2 : null,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to save");
-    } catch (err) {
-      console.error("Save failed", err);
-      alert("Failed to save data");
-    } finally {
-      setIsSaving(false);
-    }
+    setChildcare({ costPerDay: 0, daysPerWeek: 0 });
   };
 
   const getYearlyData = (person: IncomeState, year: string) => {
@@ -406,6 +430,12 @@ export function SalaryCalculator() {
   const p2Details = calculateUKNetIncome(person2, selectedYear);
   const THRESHOLD = 100000;
 
+  const totalTakeHome =
+    p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
+  const weeklyChildcare = childcare.costPerDay * childcare.daysPerWeek;
+  const yearlyChildcare = weeklyChildcare * 52;
+  const netAfterChildcare = totalTakeHome - yearlyChildcare;
+
   if (!auth.token) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -487,92 +517,145 @@ export function SalaryCalculator() {
             </Select>
           </div>
         </div>
-        <div className="flex gap-2 w-full md:w-auto">
-          <Button
-            variant={numPeople === 1 ? "default" : "outline"}
-            size="sm"
-            onClick={() => setNumPeople(1)}
-            className="flex-1 md:flex-none"
-          >
-            1 Person
-          </Button>
-          <Button
-            variant={numPeople === 2 ? "default" : "outline"}
-            size="sm"
-            onClick={() => setNumPeople(2)}
-            className="flex-1 md:flex-none"
-          >
-            2 People
-          </Button>
-          <div className="w-px h-8 bg-border mx-1 hidden md:block" />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={saveData}
-            disabled={isSaving}
-            className="flex-1 md:flex-none"
-          >
-            <Save className="h-4 w-4 mr-2" /> {isSaving ? "Saving..." : "Save"}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={logout}
-            className="flex-1 md:flex-none"
-          >
-            <LogOut className="h-4 w-4 mr-2" /> Logout
-          </Button>
+        <div className="flex items-center gap-4 w-full md:w-auto">
+          {lastSaved && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+              <span>Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant={numPeople === 1 ? "default" : "outline"}
+              size="sm"
+              onClick={() => setNumPeople(1)}
+            >
+              1 Person
+            </Button>
+            <Button
+              variant={numPeople === 2 ? "default" : "outline"}
+              size="sm"
+              onClick={() => setNumPeople(2)}
+            >
+              2 People
+            </Button>
+            <Button variant="ghost" size="sm" onClick={logout}>
+              <LogOut className="h-4 w-4 mr-2" /> Logout
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div
-        className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
-      >
-        <PersonForm
-          personNum={1}
-          name={person1.name}
-          onNameChange={(name) => updatePersonName(1, name)}
-          yearlyData={getYearlyData(person1, selectedYear)}
-          onUpdate={(updates) => updateYearlyData(1, selectedYear, updates)}
-          details={p1Details}
-          year={selectedYear}
-        />
-        {numPeople === 2 && (
+      <div className="grid gap-8 grid-cols-1 md:grid-cols-3">
+        <div className={`md:col-span-2 grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
           <PersonForm
-            personNum={2}
-            name={person2.name}
-            onNameChange={(name) => updatePersonName(2, name)}
-            yearlyData={getYearlyData(person2, selectedYear)}
-            onUpdate={(updates) => updateYearlyData(2, selectedYear, updates)}
-            details={p2Details}
+            personNum={1}
+            name={person1.name}
+            onNameChange={(name) => updatePersonName(1, name)}
+            yearlyData={getYearlyData(person1, selectedYear)}
+            onUpdate={(updates) => updateYearlyData(1, selectedYear, updates)}
+            details={p1Details}
             year={selectedYear}
           />
-        )}
+          {numPeople === 2 && (
+            <PersonForm
+              personNum={2}
+              name={person2.name}
+              onNameChange={(name) => updatePersonName(2, name)}
+              yearlyData={getYearlyData(person2, selectedYear)}
+              onUpdate={(updates) => updateYearlyData(2, selectedYear, updates)}
+              details={p2Details}
+              year={selectedYear}
+            />
+          )}
+        </div>
+
+        <div className="space-y-8">
+          <Card>
+            <CardHeader>
+              <CardTitle>Childcare Calculator</CardTitle>
+              <CardDescription>Estimate monthly/yearly costs</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-left">
+              <div className="space-y-2">
+                <Label>Cost per Day (£)</Label>
+                <Input
+                  type="number"
+                  value={childcare.costPerDay || ""}
+                  onChange={(e) => setChildcare({ ...childcare, costPerDay: Number(e.target.value) })}
+                  placeholder="e.g. 70"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Days per Week</Label>
+                <Select
+                  value={String(childcare.daysPerWeek)}
+                  onValueChange={(v) => setChildcare({ ...childcare, daysPerWeek: Number(v) })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select days" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[0, 1, 2, 3, 4, 5].map((d) => (
+                      <SelectItem key={d} value={String(d)}>{d} Days</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="pt-4 border-t space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Weekly Cost:</span>
+                  <span className="font-semibold">£{weeklyChildcare.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Yearly Cost:</span>
+                  <span className="font-bold text-destructive">£{yearlyChildcare.toLocaleString()}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-2 border-primary/20 bg-primary/5">
+            <CardHeader>
+              <CardTitle>Combined Summary</CardTitle>
+              <CardDescription>Total household finances</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-left">
+              <div className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Combined Take-home:</span>
+                  <span className="font-bold text-green-600">£{totalTakeHome.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Childcare Costs:</span>
+                  <span className="font-bold text-destructive">- £{yearlyChildcare.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                </div>
+                <div className="pt-4 border-t flex justify-between items-center">
+                  <span className="font-bold">Net After Childcare:</span>
+                  <span className="font-extrabold text-2xl text-primary">
+                    £{netAfterChildcare.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <p className="text-[10px] text-muted-foreground italic text-center pt-2">
+                  This is your total household take-home pay after tax, NI, and childcare costs.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
-      <Card className="mt-8 border-2 border-primary/20">
+      <Card className="mt-8">
         <CardHeader>
-          <CardTitle>Summary & Threshold Analysis ({selectedYear})</CardTitle>
+          <CardTitle>Individual Threshold Analysis ({selectedYear})</CardTitle>
           <CardDescription>
             Estimated adjusted net income vs £100,000 threshold
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 text-left">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <SummarySection
-              personName={person1.name}
-              details={p1Details}
-              threshold={THRESHOLD}
-              year={selectedYear}
-            />
-            {numPeople === 2 && (
-              <SummarySection
-                personName={person2.name}
-                details={p2Details}
-                threshold={THRESHOLD}
-                year={selectedYear}
-              />
-            )}
+            <SummarySection personName={person1.name} details={p1Details} threshold={THRESHOLD} year={selectedYear} />
+            {numPeople === 2 && <SummarySection personName={person2.name} details={p2Details} threshold={THRESHOLD} year={selectedYear} />}
           </div>
         </CardContent>
       </Card>
@@ -580,149 +663,49 @@ export function SalaryCalculator() {
   );
 }
 
-function SummarySection({
-  personName,
-  details,
-  threshold,
-  year,
-}: {
-  personName: string;
-  details: any;
-  threshold: number;
-  year: string;
-}) {
+function SummarySection({ personName, details, threshold, year }: { personName: string; details: any; threshold: number; year: string }) {
   const adjustedNet = details.adjustedNetIncome;
   const config = TAX_YEAR_CONFIG[year];
 
   return (
-    <div
-      className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
-    >
-      <h3 className="font-bold text-xl mb-4 border-b pb-2">
-        {personName} Summary
-      </h3>
+    <div className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}>
+      <h3 className="font-bold text-xl mb-4 border-b pb-2">{personName} Summary</h3>
       <div className="space-y-3">
-        <div className="flex justify-between">
+        <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Adjusted Net Income:</span>
-          <span className="font-bold">
-            £
-            {adjustedNet.toLocaleString(undefined, {
-              maximumFractionDigits: 0,
-            })}
+          <span className={`font-bold ${adjustedNet > threshold ? 'text-destructive' : 'text-primary'}`}>
+            £{adjustedNet.toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </span>
         </div>
-        <div className="flex justify-between text-sm italic text-muted-foreground">
-          <span>Target for Childcare threshold</span>
+        <div className="flex justify-between text-xs italic text-muted-foreground">
+          <span>(Target for Childcare: &lt;£100k)</span>
+          {adjustedNet > threshold ? (
+            <span className="text-destructive font-semibold">Over by £{(adjustedNet - threshold).toLocaleString()}</span>
+          ) : (
+            <span className="text-green-600 font-semibold">Under threshold</span>
+          )}
         </div>
         <div className="pt-4 border-t space-y-2">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Take-home Pay (Est.):</span>
-            <span className="font-bold text-green-600">
-              £
-              {details.netIncome.toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </span>
+            <span className="text-muted-foreground text-sm">Take-home (Est.):</span>
+            <span className="font-bold text-green-600">£{details.netIncome.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
           </div>
-          <div className="flex justify-between text-xs text-muted-foreground pl-4">
-            <span>Income Tax:</span>
-            <span>
-              - £
-              {details.incomeTax.toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </span>
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground pl-4">
-            <span>National Insurance:</span>
-            <span>
-              - £
-              {details.ni.toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </span>
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground pl-4">
-            <span>Savings Interest (Included):</span>
-            <span>
-              + £
-              {details.interest.toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </span>
+          <div className="flex justify-between text-[10px] text-muted-foreground pl-4">
+            <span>Income Tax: -£{details.incomeTax.toLocaleString()}</span>
+            <span>NI: -£{details.ni.toLocaleString()}</span>
           </div>
         </div>
         <div className="pt-2 space-y-2">
-          <div className="flex justify-between text-sm font-semibold text-blue-600">
-            <span className="text-muted-foreground font-normal">
-              Total Pension:
-            </span>
-            <span>
-              £
-              {(
-                details.employeePension + details.employerPension
-              ).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Pension Allowance Used:</span>
+            <span className={`font-semibold ${details.pensionExceeded ? "text-destructive" : "text-blue-600"}`}>
+              £{details.currentYearContribution.toLocaleString()}
             </span>
           </div>
-          <div className="flex justify-between text-xs text-muted-foreground pl-4">
-            <span>Employee: £{details.employeePension.toLocaleString()}</span>
-            <span>Employer: £{details.employerPension.toLocaleString()}</span>
+          <div className="flex justify-between text-[10px] text-muted-foreground pl-4">
+            <span>Total Available: £{details.totalAllowanceAvailable.toLocaleString()}</span>
+            {details.pensionExceeded && <span className="text-destructive font-bold">EXCEEDS</span>}
           </div>
-        </div>
-        <div className="pt-2 space-y-2">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">
-              Pension Allowance Used:
-            </span>
-            <span
-              className={`font-semibold ${details.pensionExceeded ? "text-destructive" : "text-blue-600"}`}
-            >
-              £
-              {details.currentYearContribution.toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </span>
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground pl-4">
-            <span>
-              Current Year ({year}): £{config.pensionAllowance.toLocaleString()}
-            </span>
-            <span className="text-green-600">
-              + Carry Forward: £{details.carryForward.toLocaleString()}
-            </span>
-          </div>
-          {Object.entries(details.carryForwardBreakdown).map(([y, val]) => (
-            <div
-              key={y}
-              className="flex justify-between text-[10px] text-muted-foreground pl-8"
-            >
-              <span>Unused from {y}:</span>
-              <span>£{(val as number).toLocaleString()}</span>
-            </div>
-          ))}
-          <div className="flex justify-between text-xs font-semibold pt-1 border-t">
-            <span>Total Available:</span>
-            <span>£{details.totalAllowanceAvailable.toLocaleString()}</span>
-          </div>
-          {details.pensionExceeded && (
-            <p className="text-[10px] text-destructive font-bold text-right pt-1">
-              ⚠️ EXCEEDS TOTAL ALLOWANCE
-            </p>
-          )}
-        </div>
-        <div className="mt-4 pt-4 border-t border-dashed">
-          {adjustedNet > threshold ? (
-            <p className="text-sm font-semibold text-destructive">
-              ⚠️ Over threshold by £
-              {(adjustedNet - threshold).toLocaleString(undefined, {
-                maximumFractionDigits: 0,
-              })}
-            </p>
-          ) : (
-            <p className="text-sm font-semibold text-green-600">
-              ✅ Under threshold
-            </p>
-          )}
         </div>
       </div>
     </div>
@@ -739,246 +722,73 @@ interface PersonFormProps {
   year: string;
 }
 
-function PersonForm({
-  name,
-  onNameChange,
-  yearlyData,
-  onUpdate,
-  year,
-}: PersonFormProps) {
-  const addBonus = () =>
-    onUpdate({
-      bonuses: [
-        ...yearlyData.bonuses,
-        { id: crypto.randomUUID(), type: "fixed", value: 0 },
-      ],
-    });
-  const updateBonus = (id: string, updates: any) =>
-    onUpdate({
-      bonuses: yearlyData.bonuses.map((b) =>
-        b.id === id ? { ...b, ...updates } : b,
-      ),
-    });
-  const removeBonus = (id: string) =>
-    onUpdate({ bonuses: yearlyData.bonuses.filter((b) => b.id !== id) });
+function PersonForm({ name, onNameChange, yearlyData, onUpdate, year }: PersonFormProps) {
+  const addBonus = () => onUpdate({ bonuses: [...yearlyData.bonuses, { id: crypto.randomUUID(), name: "New Bonus", type: "fixed", value: 0 }] });
+  const updateBonus = (id: string, updates: any) => onUpdate({ bonuses: yearlyData.bonuses.map(b => b.id === id ? { ...b, ...updates } : b) });
+  const removeBonus = (id: string) => onUpdate({ bonuses: yearlyData.bonuses.filter(b => b.id !== id) });
 
-  const addSacrifice = () =>
-    onUpdate({
-      sacrifices: [
-        ...yearlyData.sacrifices,
-        {
-          id: crypto.randomUUID(),
-          name: "New Sacrifice",
-          amount: 0,
-          type: "other",
-        },
-      ],
-    });
-  const updateSacrifice = (id: string, updates: any) =>
-    onUpdate({
-      sacrifices: yearlyData.sacrifices.map((s) =>
-        s.id === id ? { ...s, ...updates } : s,
-      ),
-    });
-  const removeSacrifice = (id: string) =>
-    onUpdate({ sacrifices: yearlyData.sacrifices.filter((s) => s.id !== id) });
+  const addSacrifice = () => onUpdate({ sacrifices: [...yearlyData.sacrifices, { id: crypto.randomUUID(), name: "New Sacrifice", amount: 0, type: "other" }] });
+  const updateSacrifice = (id: string, updates: any) => onUpdate({ sacrifices: yearlyData.sacrifices.map(s => s.id === id ? { ...s, ...updates } : s) });
+  const removeSacrifice = (id: string) => onUpdate({ sacrifices: yearlyData.sacrifices.filter(s => s.id !== id) });
 
-  const addSavings = () =>
-    onUpdate({
-      savings: [
-        ...yearlyData.savings,
-        {
-          id: crypto.randomUUID(),
-          name: "Account",
-          balance: 0,
-          interestRate: 0,
-        },
-      ],
-    });
-  const updateSavings = (id: string, updates: any) =>
-    onUpdate({
-      savings: yearlyData.savings.map((s) =>
-        s.id === id ? { ...s, ...updates } : s,
-      ),
-    });
-  const removeSavings = (id: string) =>
-    onUpdate({ savings: yearlyData.savings.filter((s) => s.id !== id) });
+  const addSavings = () => onUpdate({ savings: [...yearlyData.savings, { id: crypto.randomUUID(), name: "Account", balance: 0, interestRate: 0 }] });
+  const updateSavings = (id: string, updates: any) => onUpdate({ savings: yearlyData.savings.map(s => s.id === id ? { ...s, ...updates } : s) });
+  const removeSavings = (id: string) => onUpdate({ savings: yearlyData.savings.filter(s => s.id !== id) });
 
   return (
-    <Card className="w-full">
+    <Card className="w-full h-full">
       <CardHeader>
-        <Input
-          className="text-2xl font-bold border-none p-0 focus-visible:ring-0 h-auto w-full"
-          value={name}
-          onChange={(e) => onNameChange(e.target.value)}
-        />
+        <Input className="text-2xl font-bold border-none p-0 focus-visible:ring-0 h-auto w-full" value={name} onChange={(e) => onNameChange(e.target.value)} />
         <CardDescription>Income & Savings for {year}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6 text-left">
         <div className="space-y-2">
           <Label>Base Salary (£)</Label>
-          <Input
-            type="number"
-            value={yearlyData.baseSalary || ""}
-            onChange={(e) => onUpdate({ baseSalary: Number(e.target.value) })}
-            placeholder="e.g. 50000"
-          />
+          <Input type="number" value={yearlyData.baseSalary || ""} onChange={(e) => onUpdate({ baseSalary: Number(e.target.value) })} placeholder="e.g. 50000" />
         </div>
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <Label>Bonuses</Label>
-            <Button variant="outline" size="sm" onClick={addBonus}>
-              <Plus className="h-4 w-4 mr-1" /> Add
-            </Button>
-          </div>
-          {yearlyData.bonuses.map((b) => (
-            <div key={b.id} className="flex gap-2">
-              <Input
-                type="number"
-                className="flex-1"
-                value={b.value || ""}
-                onChange={(e) =>
-                  updateBonus(b.id, { value: Number(e.target.value) })
-                }
-              />
-              <select
-                className="h-10 w-24 rounded-md border border-input px-3 py-2 text-sm"
-                value={b.type}
-                onChange={(e) => updateBonus(b.id, { type: e.target.value })}
-              >
-                <option value="fixed">£</option>
-                <option value="percentage">%</option>
-              </select>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => removeBonus(b.id)}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
+          <div className="flex items-center justify-between"><Label>Bonuses</Label><Button variant="outline" size="sm" onClick={addBonus}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
+          {yearlyData.bonuses.map(b => (
+            <div key={b.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex gap-2">
+                <Input className="flex-1 bg-transparent text-sm font-medium" value={b.name} onChange={(e) => updateBonus(b.id, { name: e.target.value })} placeholder="Bonus Name" />
+                <Button variant="ghost" size="icon" onClick={() => removeBonus(b.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              </div>
+              <div className="flex gap-2">
+                <Input type="number" className="flex-1" value={b.value || ""} onChange={(e) => updateBonus(b.id, { value: Number(e.target.value) })} />
+                <select className="h-10 w-24 rounded-md border border-input px-3 py-2 text-sm bg-background" value={b.type} onChange={(e) => updateBonus(b.id, { type: e.target.value })}>
+                  <option value="fixed">£</option><option value="percentage">%</option>
+                </select>
+              </div>
             </div>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label>Pension (%)</Label>
-            <Input
-              type="number"
-              value={yearlyData.employeePensionPercent || ""}
-              onChange={(e) =>
-                onUpdate({ employeePensionPercent: Number(e.target.value) })
-              }
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Employer (%)</Label>
-            <Input
-              type="number"
-              value={yearlyData.employerPensionPercent || ""}
-              onChange={(e) =>
-                onUpdate({ employerPensionPercent: Number(e.target.value) })
-              }
-            />
-          </div>
+          <div className="space-y-2"><Label>Pension (%)</Label><Input type="number" value={yearlyData.employeePensionPercent || ""} onChange={(e) => onUpdate({ employeePensionPercent: Number(e.target.value) })} /></div>
+          <div className="space-y-2"><Label>Employer (%)</Label><Input type="number" value={yearlyData.employerPensionPercent || ""} onChange={(e) => onUpdate({ employerPensionPercent: Number(e.target.value) })} /></div>
         </div>
         <div className="space-y-4 border-t pt-4">
-          <div className="flex items-center justify-between">
-            <Label className="text-base font-semibold">
-              Sacrifices & Donations
-            </Label>
-            <Button variant="outline" size="sm" onClick={addSacrifice}>
-              <Plus className="h-4 w-4 mr-1" /> Add
-            </Button>
-          </div>
-          {yearlyData.sacrifices.map((s) => (
+          <div className="flex items-center justify-between"><Label className="text-base font-semibold">Sacrifices & Donations</Label><Button variant="outline" size="sm" onClick={addSacrifice}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
+          {yearlyData.sacrifices.map(s => (
             <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex gap-2"><Input className="flex-1 bg-transparent" value={s.name} onChange={(e) => updateSacrifice(s.id, { name: e.target.value })} /><Button variant="ghost" size="icon" onClick={() => removeSacrifice(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
               <div className="flex gap-2">
-                <Input
-                  className="flex-1 bg-transparent"
-                  value={s.name}
-                  onChange={(e) =>
-                    updateSacrifice(s.id, { name: e.target.value })
-                  }
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeSacrifice(s.id)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  className="flex-1"
-                  value={s.amount || ""}
-                  onChange={(e) =>
-                    updateSacrifice(s.id, { amount: Number(e.target.value) })
-                  }
-                />
-                <select
-                  className="h-10 w-32 rounded-md border border-input px-3 py-2 text-sm"
-                  value={s.type}
-                  onChange={(e) =>
-                    updateSacrifice(s.id, { type: e.target.value })
-                  }
-                >
-                  <option value="other">General</option>
-                  <option value="pension">Pension</option>
-                  <option value="ev">Electric Car</option>
-                  <option value="charity">Gift Aid</option>
+                <Input type="number" className="flex-1" value={s.amount || ""} onChange={(e) => updateSacrifice(s.id, { amount: Number(e.target.value) })} />
+                <select className="h-10 w-32 rounded-md border border-input px-3 py-2 text-sm bg-background" value={s.type} onChange={(e) => updateSacrifice(s.id, { type: e.target.value })}>
+                  <option value="other">General</option><option value="pension">Pension</option><option value="ev">Electric Car</option><option value="charity">Gift Aid</option>
                 </select>
               </div>
             </div>
           ))}
         </div>
         <div className="space-y-4 border-t pt-4">
-          <div className="flex items-center justify-between">
-            <Label className="text-base font-semibold">Savings Accounts</Label>
-            <Button variant="outline" size="sm" onClick={addSavings}>
-              <Plus className="h-4 w-4 mr-1" /> Add
-            </Button>
-          </div>
-          {yearlyData.savings.map((s) => (
+          <div className="flex items-center justify-between"><Label className="text-base font-semibold">Savings Accounts</Label><Button variant="outline" size="sm" onClick={addSavings}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
+          {yearlyData.savings.map(s => (
             <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex gap-2"><Input className="flex-1 bg-transparent" value={s.name} onChange={(e) => updateSavings(s.id, { name: e.target.value })} /><Button variant="ghost" size="icon" onClick={() => removeSavings(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
               <div className="flex gap-2">
-                <Input
-                  className="flex-1 bg-transparent"
-                  value={s.name}
-                  onChange={(e) =>
-                    updateSavings(s.id, { name: e.target.value })
-                  }
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeSavings(s.id)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  className="flex-1"
-                  placeholder="Balance"
-                  value={s.balance || ""}
-                  onChange={(e) =>
-                    updateSavings(s.id, { balance: Number(e.target.value) })
-                  }
-                />
-                <Input
-                  type="number"
-                  className="w-24"
-                  placeholder="Rate %"
-                  value={s.interestRate || ""}
-                  onChange={(e) =>
-                    updateSavings(s.id, {
-                      interestRate: Number(e.target.value),
-                    })
-                  }
-                />
+                <Input type="number" className="flex-1" placeholder="Balance" value={s.balance || ""} onChange={(e) => updateSavings(s.id, { balance: Number(e.target.value) })} />
+                <Input type="number" className="w-24" placeholder="Rate %" value={s.interestRate || ""} onChange={(e) => updateSavings(s.id, { interestRate: Number(e.target.value) })} />
               </div>
             </div>
           ))}

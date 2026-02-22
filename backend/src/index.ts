@@ -79,6 +79,7 @@ app.post("/api/calculation", async (c) => {
         numPeople: body.numPeople,
         person1Data: body.person1Data,
         person2Data: body.person2Data,
+        childcareData: body.childcareData,
         updatedAt: new Date(),
       })
       .where(eq(calculations.userId, payload.userId))
@@ -92,6 +93,7 @@ app.post("/api/calculation", async (c) => {
         numPeople: body.numPeople,
         person1Data: body.person1Data,
         person2Data: body.person2Data,
+        childcareData: body.childcareData,
       })
       .returning();
     return c.json(inserted);
