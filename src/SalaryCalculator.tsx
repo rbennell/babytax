@@ -16,7 +16,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, LogOut, Calculator, Calendar, CheckCircle2, Baby, Info, ArrowRight } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  LogOut,
+  Calculator,
+  Calendar,
+  CheckCircle2,
+  Baby,
+  Info,
+  ArrowRight,
+  ShieldCheck,
+} from "lucide-react";
 
 interface AuthState {
   token: string | null;
@@ -65,15 +76,26 @@ interface ChildcareChild {
   id: string;
   name: string;
   daysPerWeek: number;
+  hoursPerDay: number;
   dailyCost: number;
   topUpCost: number;
+  benefitStartDate: string;
+  benefitEndDate: string;
+  useTaxFreeChildcare: boolean;
 }
 
 interface ChildcareData {
   children: ChildcareChild[];
 }
 
-const TAX_YEARS = ["2022/23", "2023/24", "2024/25", "2025/26", "2026/27"];
+const TAX_YEARS = [
+  "2022/23",
+  "2023/24",
+  "2024/25",
+  "2025/26",
+  "2026/27",
+  "2027/28",
+];
 const DEFAULT_YEAR = "2025/26";
 
 const TAX_YEAR_CONFIG: Record<string, any> = {
@@ -127,6 +149,16 @@ const TAX_YEAR_CONFIG: Record<string, any> = {
     niRate2: 0.02,
     pensionAllowance: 60000,
   },
+  "2027/28": {
+    personalAllowance: 12570,
+    basicRateLimit: 37700,
+    higherRateLimit: 125140,
+    niPt: 12570,
+    niUel: 50270,
+    niRate1: 0.08,
+    niRate2: 0.02,
+    pensionAllowance: 60000,
+  },
 };
 
 const initialYearlyData = (): YearlyIncomeData => ({
@@ -149,6 +181,16 @@ const initialIncomeState = (defaultName: string): IncomeState => ({
     {},
   ),
 });
+
+interface PersonFormProps {
+  personNum: 1 | 2;
+  name: string;
+  onNameChange: (name: string) => void;
+  yearlyData: YearlyIncomeData;
+  onUpdate: (updates: Partial<YearlyIncomeData>) => void;
+  details: any;
+  year: string;
+}
 
 export function SalaryCalculator() {
   const [auth, setAuth] = useState<AuthState>(() => {
@@ -228,12 +270,11 @@ export function SalaryCalculator() {
     }
   };
 
-  // Auto-save logic
   useEffect(() => {
     if (!auth.token) return;
     const timer = setTimeout(() => {
       saveData();
-    }, 2000); // 2 second debounce
+    }, 2000);
     return () => clearTimeout(timer);
   }, [person1, person2, numPeople, childcare, auth.token]);
 
@@ -343,14 +384,16 @@ export function SalaryCalculator() {
     };
   };
 
-  const calculateUKNetIncome = (person: IncomeState, year: string, targetAdjustedNet?: number) => {
+  const calculateUKNetIncome = (
+    person: IncomeState,
+    year: string,
+    targetAdjustedNet?: number,
+  ) => {
     const originalData = getYearlyData(person, year);
-    
-    // If targetAdjustedNet is provided, we simulate what the income tax/NI would be
-    // This is a simplified simulation for the "what if" analysis
-    const data = targetAdjustedNet !== undefined 
-      ? { ...originalData, baseSalary: targetAdjustedNet } // This is just for thresholds, not 100% accurate for NI
-      : originalData;
+    const data =
+      targetAdjustedNet !== undefined
+        ? { ...originalData, baseSalary: targetAdjustedNet }
+        : originalData;
 
     const config = TAX_YEAR_CONFIG[year] || TAX_YEAR_CONFIG[DEFAULT_YEAR];
     const totalGross = calculateTotalGross(data);
@@ -443,69 +486,219 @@ export function SalaryCalculator() {
   const p2Details = calculateUKNetIncome(person2, selectedYear);
   const THRESHOLD = 100000;
 
-  const isEligibleForFreeChildcare = p1Details.adjustedNetIncome <= THRESHOLD && (numPeople === 1 || p2Details.adjustedNetIncome <= THRESHOLD);
+  const isEligibleForFreeChildcare =
+    p1Details.adjustedNetIncome <= THRESHOLD &&
+    (numPeople === 1 || p2Details.adjustedNetIncome <= THRESHOLD);
 
-  const childcareCosts = useMemo(() => {
+  const getTaxYearDates = (year: string) => {
+    const parts = year.split("/");
+    const startYear = parts[0] ? parseInt(parts[0]) : 2025;
+    return {
+      start: new Date(`${startYear}-04-06`),
+      end: new Date(`${startYear + 1}-04-05`),
+    };
+  };
+
+  const calculateChildcareForEligibility = (isEligible: boolean) => {
     let totalFullYear = 0;
-    let totalWithFreeHours = 0;
+    let totalWithBenefits = 0;
+    let totalTaxFreeSavings = 0;
 
-    childcare.children.forEach(child => {
-      const weeklyFull = child.daysPerWeek * child.dailyCost;
-      const weeklyFree = child.daysPerWeek * child.topUpCost;
-      
-      const yearlyFull = weeklyFull * 52;
-      // 30 hours (approx 3 days) free for 38 weeks
-      // We assume if daysPerWeek <= 3, they only pay topUp for 38 weeks.
-      // If > 3, they pay (topUp for 3 days + full for remaining days) for 38 weeks.
-      const dailyFreeHoursEquivalent = 3; 
-      const freeDays = Math.min(child.daysPerWeek, dailyFreeHoursEquivalent);
-      const paidDays = Math.max(0, child.daysPerWeek - dailyFreeHoursEquivalent);
-      
-      const weeklyDuringTerm = (freeDays * child.topUpCost) + (paidDays * child.dailyCost);
-      const yearlyWithFree = (weeklyDuringTerm * 38) + (weeklyFull * 14);
+    const taxYear = getTaxYearDates(selectedYear);
 
-      totalFullYear += yearlyFull;
-      totalWithFreeHours += yearlyWithFree;
+    childcare.children.forEach((child) => {
+      const hoursPerDay = child.hoursPerDay || 10;
+      const hourlyRate = child.dailyCost / hoursPerDay;
+      const weeklyHours = child.daysPerWeek * hoursPerDay;
+
+      const totalFreeHoursAvailable = 1140;
+
+      const benefitStart = child.benefitStartDate
+        ? new Date(child.benefitStartDate)
+        : taxYear.start;
+      const benefitEnd = child.benefitEndDate
+        ? new Date(child.benefitEndDate)
+        : taxYear.end;
+
+      const overlapStart = new Date(
+        Math.max(taxYear.start.getTime(), benefitStart.getTime()),
+      );
+      const overlapEnd = new Date(
+        Math.min(taxYear.end.getTime(), benefitEnd.getTime()),
+      );
+
+      const overlapDays = Math.max(
+        0,
+        Math.ceil(
+          (overlapEnd.getTime() - overlapStart.getTime()) /
+            (1000 * 60 * 60 * 24),
+        ) + 1,
+      );
+      const overlapWeeks = overlapDays / 7;
+      const overlapYearFraction = overlapWeeks / 52;
+
+      const yearlyFullCost = child.dailyCost * child.daysPerWeek * 52;
+
+      const freeHoursInOverlap = isEligible
+        ? totalFreeHoursAvailable * overlapYearFraction
+        : 0;
+      const totalHoursInOverlap = weeklyHours * overlapWeeks;
+      const coveredHours = Math.min(totalHoursInOverlap, freeHoursInOverlap);
+      const remainingHoursInOverlap = totalHoursInOverlap - coveredHours;
+
+      const costInOverlap =
+        coveredHours * child.topUpCost + remainingHoursInOverlap * hourlyRate;
+      const costOutsideOverlap = weeklyHours * (52 - overlapWeeks) * hourlyRate;
+
+      const costWith30Hours = costInOverlap + costOutsideOverlap;
+
+      let finalCostForChild = costWith30Hours;
+      let tfcSaving = 0;
+
+      if (child.useTaxFreeChildcare && isEligible) {
+        tfcSaving = Math.min(finalCostForChild * 0.2, 2000);
+        finalCostForChild -= tfcSaving;
+      }
+
+      totalFullYear += yearlyFullCost;
+      totalWithBenefits += finalCostForChild;
+      totalTaxFreeSavings += tfcSaving;
     });
 
     return {
       full: totalFullYear,
-      withFree: totalWithFreeHours,
-      actual: isEligibleForFreeChildcare ? totalWithFreeHours : totalFullYear,
-      savings: totalFullYear - totalWithFreeHours
+      actual: totalWithBenefits,
+      savings: totalFullYear - totalWithBenefits,
+      taxFreeSavings: totalTaxFreeSavings,
     };
-  }, [childcare.children, isEligibleForFreeChildcare]);
+  };
 
-  const totalTakeHome = p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
+  const childcareCosts = useMemo(
+    () => calculateChildcareForEligibility(isEligibleForFreeChildcare),
+    [childcare.children, isEligibleForFreeChildcare, selectedYear],
+  );
+
+  const totalTakeHome =
+    p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
   const netAfterChildcare = totalTakeHome - childcareCosts.actual;
 
-  // Savings Analysis Logic
   const savingsAnalysis = useMemo(() => {
     const analyzePerson = (person: IncomeState, details: any) => {
       if (details.adjustedNetIncome <= THRESHOLD) return null;
-      
       const sacrificeNeeded = details.adjustedNetIncome - THRESHOLD;
-      // We simulate sacrificing exactly down to 100k
-      const simulatedDetails = calculateUKNetIncome(person, selectedYear, THRESHOLD);
-      
-      const taxSaved = (details.incomeTax + details.ni) - (simulatedDetails.incomeTax + simulatedDetails.ni);
+      const simulatedDetails = calculateUKNetIncome(
+        person,
+        selectedYear,
+        THRESHOLD,
+      );
+      const taxSaved =
+        details.incomeTax +
+        details.ni -
+        (simulatedDetails.incomeTax + simulatedDetails.ni);
       const takeHomeLoss = details.netIncome - simulatedDetails.netIncome;
-      
-      return {
-        sacrificeNeeded,
-        taxSaved,
-        takeHomeLoss,
-        simulatedDetails
-      };
+      return { sacrificeNeeded, taxSaved, takeHomeLoss };
     };
 
     const p1Analysis = analyzePerson(person1, p1Details);
-    const p2Analysis = numPeople === 2 ? analyzePerson(person2, p2Details) : null;
+    const p2Analysis =
+      numPeople === 2 ? analyzePerson(person2, p2Details) : null;
 
-    const potentialChildcareSaving = (!isEligibleForFreeChildcare && (p1Analysis || p2Analysis)) ? childcareCosts.savings : 0;
-    
-    return { p1Analysis, p2Analysis, potentialChildcareSaving };
-  }, [person1, person2, p1Details, p2Details, numPeople, selectedYear, isEligibleForFreeChildcare, childcareCosts.savings]);
+    // Potential childcare savings if both were under threshold
+    const calculateChildcareForYear = (
+      yearStr: string,
+      isEligible: boolean,
+    ) => {
+      let totalFullYear = 0;
+      let totalWithBenefits = 0;
+      const tYear = getTaxYearDates(yearStr);
+
+      childcare.children.forEach((child) => {
+        const hoursPerDay = child.hoursPerDay || 10;
+        const hourlyRate = child.dailyCost / hoursPerDay;
+        const weeklyHours = child.daysPerWeek * hoursPerDay;
+        const totalFreeHoursAvailable = 1140;
+
+        const benefitStart = child.benefitStartDate
+          ? new Date(child.benefitStartDate)
+          : tYear.start;
+        const benefitEnd = child.benefitEndDate
+          ? new Date(child.benefitEndDate)
+          : tYear.end;
+
+        const overlapStart = new Date(
+          Math.max(tYear.start.getTime(), benefitStart.getTime()),
+        );
+        const overlapEnd = new Date(
+          Math.min(tYear.end.getTime(), benefitEnd.getTime()),
+        );
+
+        const overlapDays = Math.max(
+          0,
+          Math.ceil(
+            (overlapEnd.getTime() - overlapStart.getTime()) /
+              (1000 * 60 * 60 * 24),
+          ) + 1,
+        );
+        const overlapWeeks = overlapDays / 7;
+        const overlapYearFraction = overlapWeeks / 52;
+
+        const yearlyFullCost = child.dailyCost * child.daysPerWeek * 52;
+        const freeHoursInOverlap = isEligible
+          ? totalFreeHoursAvailable * overlapYearFraction
+          : 0;
+        const totalHoursInOverlap = weeklyHours * overlapWeeks;
+        const coveredHours = Math.min(totalHoursInOverlap, freeHoursInOverlap);
+        const remainingHoursInOverlap = totalHoursInOverlap - coveredHours;
+
+        const costInOverlap =
+          coveredHours * child.topUpCost + remainingHoursInOverlap * hourlyRate;
+        const costOutsideOverlap =
+          weeklyHours * (52 - overlapWeeks) * hourlyRate;
+        let finalCostForChild = costInOverlap + costOutsideOverlap;
+
+        if (child.useTaxFreeChildcare && isEligible) {
+          finalCostForChild -= Math.min(finalCostForChild * 0.2, 2000);
+        }
+        totalFullYear += yearlyFullCost;
+        totalWithBenefits += finalCostForChild;
+      });
+      return totalFullYear - totalWithBenefits;
+    };
+
+    const potentialChildcareSaving = calculateChildcareForYear(
+      selectedYear,
+      true,
+    );
+
+    // Look ahead to next year if sacrifice is applied
+    const nextYearIdx = TAX_YEARS.indexOf(selectedYear) + 1;
+    let nextYearSaving = 0;
+    let nextYearLabel = "";
+    if (nextYearIdx >= 0 && nextYearIdx < TAX_YEARS.length) {
+      const label = TAX_YEARS[nextYearIdx];
+      if (label) {
+        nextYearLabel = label;
+        nextYearSaving = calculateChildcareForYear(nextYearLabel, true);
+      }
+    }
+
+    return {
+      p1Analysis,
+      p2Analysis,
+      potentialChildcareSaving,
+      nextYearSaving,
+      nextYearLabel,
+    };
+  }, [
+    person1,
+    person2,
+    p1Details,
+    p2Details,
+    numPeople,
+    selectedYear,
+    isEligibleForFreeChildcare,
+    childcare.children,
+  ]);
 
   if (!auth.token) {
     return (
@@ -565,23 +758,37 @@ export function SalaryCalculator() {
   }
 
   const addChild = () => {
-    setChildcare(prev => ({
+    const parts = selectedYear.split("/");
+    const startYear = parts[0] ? parseInt(parts[0]) : 2025;
+    setChildcare((prev) => ({
       children: [
         ...prev.children,
-        { id: crypto.randomUUID(), name: `Child ${prev.children.length + 1}`, daysPerWeek: 0, dailyCost: 0, topUpCost: 0 }
-      ]
+        {
+          id: crypto.randomUUID(),
+          name: `Child ${prev.children.length + 1}`,
+          daysPerWeek: 0,
+          hoursPerDay: 10,
+          dailyCost: 0,
+          topUpCost: 0,
+          benefitStartDate: `${startYear}-04-06`,
+          benefitEndDate: `${startYear + 1}-04-05`,
+          useTaxFreeChildcare: true,
+        },
+      ],
     }));
   };
 
   const updateChild = (id: string, updates: Partial<ChildcareChild>) => {
-    setChildcare(prev => ({
-      children: prev.children.map(c => c.id === id ? { ...c, ...updates } : c)
+    setChildcare((prev) => ({
+      children: prev.children.map((c) =>
+        c.id === id ? { ...c, ...updates } : c,
+      ),
     }));
   };
 
   const removeChild = (id: string) => {
-    setChildcare(prev => ({
-      children: prev.children.filter(c => c.id !== id)
+    setChildcare((prev) => ({
+      children: prev.children.filter((c) => c.id !== id),
     }));
   };
 
@@ -613,7 +820,13 @@ export function SalaryCalculator() {
           {lastSaved && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-              <span>Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <span>
+                Saved{" "}
+                {lastSaved.toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
             </div>
           )}
           <div className="flex gap-2">
@@ -640,7 +853,9 @@ export function SalaryCalculator() {
 
       <div className="grid gap-8 grid-cols-1 md:grid-cols-3">
         <div className="md:col-span-2 grid gap-8">
-          <div className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
+          <div
+            className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+          >
             <PersonForm
               personNum={1}
               name={person1.name}
@@ -656,7 +871,9 @@ export function SalaryCalculator() {
                 name={person2.name}
                 onNameChange={(name) => updatePersonName(2, name)}
                 yearlyData={getYearlyData(person2, selectedYear)}
-                onUpdate={(updates) => updateYearlyData(2, selectedYear, updates)}
+                onUpdate={(updates) =>
+                  updateYearlyData(2, selectedYear, updates)
+                }
                 details={p2Details}
                 year={selectedYear}
               />
@@ -667,58 +884,112 @@ export function SalaryCalculator() {
             <Card className="border-2 border-amber-500/50 bg-amber-50/50">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Info className="h-5 w-5 text-amber-600" />
-                  Threshold Savings Analysis
+                  <Info className="h-5 w-5 text-amber-600" /> Threshold Savings
+                  Analysis
                 </CardTitle>
-                <CardDescription>How much could you save by sacrificing below £100k?</CardDescription>
+                <CardDescription>
+                  How much could you save by sacrificing below £100k?
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {[
-                    { analysis: savingsAnalysis.p1Analysis, name: person1.name },
-                    { analysis: savingsAnalysis.p2Analysis, name: person2.name }
-                  ].map((item, idx) => item.analysis && (
-                    <div key={idx} className="p-4 bg-white rounded-lg border border-amber-200 space-y-3 text-sm">
-                      <h4 className="font-bold border-b pb-1">{item.name}</h4>
-                      <div className="flex justify-between">
-                        <span>Sacrifice needed:</span>
-                        <span className="font-semibold text-amber-700">£{item.analysis.sacrificeNeeded.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Tax/NI Saved:</span>
-                        <span className="font-semibold text-green-600">+£{item.analysis.taxSaved.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Take-home Reduction:</span>
-                        <span className="font-semibold text-destructive">-£{item.analysis.takeHomeLoss.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  ))}
+                    {
+                      analysis: savingsAnalysis.p1Analysis,
+                      name: person1.name,
+                    },
+                    {
+                      analysis: savingsAnalysis.p2Analysis,
+                      name: person2.name,
+                    },
+                  ].map(
+                    (item, idx) =>
+                      item.analysis && (
+                        <div
+                          key={idx}
+                          className="p-4 bg-white rounded-lg border border-amber-200 space-y-3 text-sm"
+                        >
+                          <h4 className="font-bold border-b pb-1">
+                            {item.name}
+                          </h4>
+                          <div className="flex justify-between">
+                            <span>Sacrifice needed:</span>
+                            <span className="font-semibold text-amber-700">
+                              £{item.analysis.sacrificeNeeded.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Tax/NI Saved:</span>
+                            <span className="font-semibold text-green-600">
+                              +£{item.analysis.taxSaved.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Take-home Reduction:</span>
+                            <span className="font-semibold text-destructive">
+                              -£{item.analysis.takeHomeLoss.toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      ),
+                  )}
                 </div>
-
                 <div className="p-4 bg-green-50 border border-green-200 rounded-lg space-y-4">
                   <h4 className="font-bold text-green-800 flex items-center gap-2">
-                    <Baby className="h-4 w-4" /> Childcare Benefit
+                    <Baby className="h-4 w-4" /> Potential Comprehensive Benefit
                   </h4>
-                  <div className="flex justify-between items-center">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Estimated Childcare Savings:</p>
-                      <p className="text-xs text-muted-foreground">From 30 free hours (38 weeks/year)</p>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-amber-800">
+                          In Current Year ({selectedYear}):
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Gain from 30 free hours + Tax-Free Childcare
+                        </p>
+                      </div>
+                      <span className="text-xl font-bold text-green-600">
+                        £
+                        {savingsAnalysis.potentialChildcareSaving.toLocaleString()}
+                      </span>
                     </div>
-                    <span className="text-2xl font-extrabold text-green-600">
-                      £{childcareCosts.savings.toLocaleString()}
-                    </span>
+
+                    {savingsAnalysis.nextYearLabel && (
+                      <div className="flex justify-between items-center pt-2 border-t border-green-100">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-amber-800">
+                            In Next Year ({savingsAnalysis.nextYearLabel}):
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Estimated benefit if eligibility maintained
+                          </p>
+                        </div>
+                        <span className="text-xl font-bold text-blue-600">
+                          £{savingsAnalysis.nextYearSaving.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  
+
                   <div className="pt-4 border-t border-green-200">
                     <div className="flex justify-between items-center">
-                      <span className="font-bold text-lg">Net Yearly Gain:</span>
+                      <span className="font-bold text-lg text-primary">
+                        Total Potential Gain:
+                      </span>
                       <span className="text-2xl font-black text-primary">
-                        £{((savingsAnalysis.p1Analysis?.taxSaved || 0) + (savingsAnalysis.p2Analysis?.taxSaved || 0) + childcareCosts.savings - ((savingsAnalysis.p1Analysis?.takeHomeLoss || 0) + (savingsAnalysis.p2Analysis?.takeHomeLoss || 0))).toLocaleString()}
+                        £
+                        {(
+                          (savingsAnalysis.p1Analysis?.taxSaved || 0) +
+                          (savingsAnalysis.p2Analysis?.taxSaved || 0) +
+                          savingsAnalysis.potentialChildcareSaving -
+                          ((savingsAnalysis.p1Analysis?.takeHomeLoss || 0) +
+                            (savingsAnalysis.p2Analysis?.takeHomeLoss || 0))
+                        ).toLocaleString()}
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground mt-2 italic">
-                      Combined tax savings + free childcare benefit - reduction in base take-home pay.
+                      Tax savings + Childcare benefits ({selectedYear}) -
+                      Take-home reduction.
                     </p>
                   </div>
                 </div>
@@ -740,59 +1011,156 @@ export function SalaryCalculator() {
             </CardHeader>
             <CardContent className="space-y-4 text-left">
               {childcare.children.length === 0 && (
-                <p className="text-sm text-muted-foreground italic text-center py-4">No children added. Click + to add.</p>
+                <p className="text-sm text-muted-foreground italic text-center py-4">
+                  No children added.
+                </p>
               )}
               {childcare.children.map((child) => (
-                <div key={child.id} className="space-y-3 p-3 bg-muted/30 rounded-lg border border-border relative group">
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                <div
+                  key={child.id}
+                  className="space-y-3 p-3 bg-muted/30 rounded-lg border border-border relative group"
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-background border shadow-sm opacity-0 group-hover:opacity-100"
                     onClick={() => removeChild(child.id)}
                   >
                     <Trash2 className="h-3 w-3 text-destructive" />
                   </Button>
-                  <Input 
-                    className="h-7 text-xs font-bold bg-transparent border-none p-0 focus-visible:ring-0" 
-                    value={child.name} 
-                    onChange={(e) => updateChild(child.id, { name: e.target.value })}
+                  <Input
+                    className="h-7 text-xs font-bold bg-transparent border-none p-0 focus-visible:ring-0"
+                    value={child.name}
+                    onChange={(e) =>
+                      updateChild(child.id, { name: e.target.value })
+                    }
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <Label className="text-[10px]">Days/Week</Label>
-                      <Input type="number" className="h-8 text-xs" value={child.daysPerWeek || ""} onChange={(e) => updateChild(child.id, { daysPerWeek: Number(e.target.value) })} />
+                      <Label className="text-[10px]">Benefit Start</Label>
+                      <Input
+                        type="date"
+                        className="h-8 text-xs"
+                        value={child.benefitStartDate}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            benefitStartDate: e.target.value,
+                          })
+                        }
+                      />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-[10px]">Daily Cost (£)</Label>
-                      <Input type="number" className="h-8 text-xs" value={child.dailyCost || ""} onChange={(e) => updateChild(child.id, { dailyCost: Number(e.target.value) })} />
+                      <Label className="text-[10px]">Benefit End</Label>
+                      <Input
+                        type="date"
+                        className="h-8 text-xs"
+                        value={child.benefitEndDate}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            benefitEndDate: e.target.value,
+                          })
+                        }
+                      />
                     </div>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-[10px]">Top-up Cost per Day (£)</Label>
-                    <Input type="number" className="h-8 text-xs" value={child.topUpCost || ""} onChange={(e) => updateChild(child.id, { topUpCost: Number(e.target.value) })} />
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Days/Wk</Label>
+                      <Input
+                        type="number"
+                        className="h-8 text-xs"
+                        value={child.daysPerWeek || ""}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            daysPerWeek: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Hrs/Day</Label>
+                      <Input
+                        type="number"
+                        className="h-8 text-xs"
+                        value={child.hoursPerDay || ""}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            hoursPerDay: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Daily £</Label>
+                      <Input
+                        type="number"
+                        className="h-8 text-xs"
+                        value={child.dailyCost || ""}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            dailyCost: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1 flex-1 mr-4">
+                      <Label className="text-[10px]">Top-up £/Day</Label>
+                      <Input
+                        type="number"
+                        className="h-8 text-xs"
+                        value={child.topUpCost || ""}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            topUpCost: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 mt-4">
+                      <Label className="text-[10px]">Tax-Free</Label>
+                      <input
+                        type="checkbox"
+                        checked={child.useTaxFreeChildcare}
+                        onChange={(e) =>
+                          updateChild(child.id, {
+                            useTaxFreeChildcare: e.target.checked,
+                          })
+                        }
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
-              
               <div className="pt-4 border-t space-y-2">
                 <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Full Yearly Cost:</span>
-                  <span className="line-through text-muted-foreground/60">£{childcareCosts.full.toLocaleString()}</span>
+                  <span className="text-muted-foreground">
+                    Full Yearly Cost:
+                  </span>
+                  <span className="line-through text-muted-foreground/60">
+                    £{childcareCosts.full.toLocaleString()}
+                  </span>
                 </div>
-                {isEligibleForFreeChildcare && (
-                  <div className="flex justify-between text-xs text-green-600 font-medium">
-                    <span>Free Childcare Benefit:</span>
-                    <span>-£{childcareCosts.savings.toLocaleString()}</span>
-                  </div>
-                )}
+                {isEligibleForFreeChildcare &&
+                  childcareCosts.taxFreeSavings > 0 && (
+                    <div className="flex justify-between text-xs text-blue-600 font-medium">
+                      <span>Tax-Free Childcare Saving:</span>
+                      <span>
+                        -£{childcareCosts.taxFreeSavings.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                 <div className="flex justify-between text-sm font-bold">
                   <span>Estimated Actual Cost:</span>
-                  <span className="text-destructive">£{childcareCosts.actual.toLocaleString()}</span>
+                  <span className="text-destructive">
+                    £{childcareCosts.actual.toLocaleString()}
+                  </span>
                 </div>
               </div>
             </CardContent>
           </Card>
-
           <Card className="border-2 border-primary/20 bg-primary/5">
             <CardHeader>
               <CardTitle>Household Net</CardTitle>
@@ -801,17 +1169,34 @@ export function SalaryCalculator() {
             <CardContent className="space-y-4 text-left">
               <div className="space-y-3">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground text-sm">Combined Take-home:</span>
-                  <span className="font-bold text-green-600">£{totalTakeHome.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  <span className="text-muted-foreground text-sm">
+                    Combined Take-home:
+                  </span>
+                  <span className="font-bold text-green-600">
+                    £
+                    {totalTakeHome.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground text-sm">Childcare Costs:</span>
-                  <span className="font-bold text-destructive">- £{childcareCosts.actual.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  <span className="text-muted-foreground text-sm">
+                    Childcare Costs:
+                  </span>
+                  <span className="font-bold text-destructive">
+                    - £
+                    {childcareCosts.actual.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
                 </div>
                 <div className="pt-4 border-t flex justify-between items-center">
                   <span className="font-bold">Disposable:</span>
                   <span className="font-extrabold text-2xl text-primary">
-                    £{netAfterChildcare.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    £
+                    {netAfterChildcare.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
                   </span>
                 </div>
               </div>
@@ -829,8 +1214,20 @@ export function SalaryCalculator() {
         </CardHeader>
         <CardContent className="space-y-4 text-left">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <SummarySection personName={person1.name} details={p1Details} threshold={THRESHOLD} year={selectedYear} />
-            {numPeople === 2 && <SummarySection personName={person2.name} details={p2Details} threshold={THRESHOLD} year={selectedYear} />}
+            <SummarySection
+              personName={person1.name}
+              details={p1Details}
+              threshold={THRESHOLD}
+              year={selectedYear}
+            />
+            {numPeople === 2 && (
+              <SummarySection
+                personName={person2.name}
+                details={p2Details}
+                threshold={THRESHOLD}
+                year={selectedYear}
+              />
+            )}
           </div>
         </CardContent>
       </Card>
@@ -838,32 +1235,332 @@ export function SalaryCalculator() {
   );
 }
 
-function SummarySection({ personName, details, threshold, year }: { personName: string; details: any; threshold: number; year: string }) {
-  const adjustedNet = details.adjustedNetIncome;
-  const config = TAX_YEAR_CONFIG[year];
-
+function PersonForm({
+  personNum,
+  name,
+  onNameChange,
+  yearlyData,
+  onUpdate,
+  details,
+  year,
+}: PersonFormProps) {
   return (
-    <div className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}>
-      <h3 className="font-bold text-xl mb-4 border-b pb-2">{personName} Summary</h3>
+    <Card>
+      <CardHeader className="pb-3">
+        <Input
+          className="text-lg font-bold h-8 w-full bg-transparent border-none p-0 mb-1 focus-visible:ring-0"
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+        />
+      </CardHeader>
+      <CardContent className="space-y-6 text-left">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-xs">Base Salary</Label>
+              <Input
+                type="number"
+                className="h-9"
+                value={yearlyData.baseSalary || ""}
+                onChange={(e) =>
+                  onUpdate({ baseSalary: Number(e.target.value) })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Car Allowance</Label>
+              <Input
+                type="number"
+                className="h-9"
+                value={yearlyData.carAllowance || ""}
+                onChange={(e) =>
+                  onUpdate({ carAllowance: Number(e.target.value) })
+                }
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-xs">Employee Pension %</Label>
+              <Input
+                type="number"
+                className="h-9"
+                value={yearlyData.employeePensionPercent || ""}
+                onChange={(e) =>
+                  onUpdate({ employeePensionPercent: Number(e.target.value) })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Employer Pension %</Label>
+              <Input
+                type="number"
+                className="h-9"
+                value={yearlyData.employerPensionPercent || ""}
+                onChange={(e) =>
+                  onUpdate({ employerPensionPercent: Number(e.target.value) })
+                }
+              />
+            </div>
+          </div>
+        </div>
+        <ListSection
+          title="Bonuses"
+          items={yearlyData.bonuses}
+          onAdd={() =>
+            onUpdate({
+              bonuses: [
+                ...yearlyData.bonuses,
+                {
+                  id: crypto.randomUUID(),
+                  name: "Bonus",
+                  type: "fixed",
+                  value: 0,
+                },
+              ],
+            })
+          }
+          onRemove={(id: string) =>
+            onUpdate({
+              bonuses: yearlyData.bonuses.filter((b: any) => b.id !== id),
+            })
+          }
+          onUpdateItem={(id: string, upd: any) =>
+            onUpdate({
+              bonuses: yearlyData.bonuses.map((b: any) =>
+                b.id === id ? { ...b, ...upd } : b,
+              ),
+            })
+          }
+          renderItem={(item: any, updateItem: any) => (
+            <div className="flex gap-2 w-full">
+              <Input
+                className="h-8 flex-1 text-xs"
+                value={item.name}
+                onChange={(e) => updateItem({ name: e.target.value })}
+              />
+              <Select
+                value={item.type}
+                onValueChange={(v: any) => updateItem({ type: v })}
+              >
+                <SelectTrigger className="h-8 w-20 text-[10px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">£</SelectItem>
+                  <SelectItem value="percentage">%</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                className="h-8 w-20 text-xs"
+                value={item.value || ""}
+                onChange={(e) => updateItem({ value: Number(e.target.value) })}
+              />
+            </div>
+          )}
+        />
+        <ListSection
+          title="Savings"
+          items={yearlyData.savings}
+          onAdd={() =>
+            onUpdate({
+              savings: [
+                ...yearlyData.savings,
+                {
+                  id: crypto.randomUUID(),
+                  name: "Savings",
+                  balance: 0,
+                  interestRate: 0,
+                },
+              ],
+            })
+          }
+          onRemove={(id: string) =>
+            onUpdate({
+              savings: yearlyData.savings.filter((s: any) => s.id !== id),
+            })
+          }
+          onUpdateItem={(id: string, upd: any) =>
+            onUpdate({
+              savings: yearlyData.savings.map((s: any) =>
+                s.id === id ? { ...s, ...upd } : s,
+              ),
+            })
+          }
+          renderItem={(item: any, updateItem: any) => (
+            <div className="flex gap-2 w-full">
+              <Input
+                className="h-8 flex-1 text-xs"
+                value={item.name}
+                onChange={(e) => updateItem({ name: e.target.value })}
+              />
+              <Input
+                type="number"
+                placeholder="Balance"
+                className="h-8 w-24 text-xs"
+                value={item.balance || ""}
+                onChange={(e) =>
+                  updateItem({ balance: Number(e.target.value) })
+                }
+              />
+              <Input
+                type="number"
+                placeholder="%"
+                className="h-8 w-16 text-xs"
+                value={item.interestRate || ""}
+                onChange={(e) =>
+                  updateItem({ interestRate: Number(e.target.value) })
+                }
+              />
+            </div>
+          )}
+        />
+        <ListSection
+          title="Sacrifices"
+          items={yearlyData.sacrifices}
+          onAdd={() =>
+            onUpdate({
+              sacrifices: [
+                ...yearlyData.sacrifices,
+                {
+                  id: crypto.randomUUID(),
+                  name: "Sacrifice",
+                  amount: 0,
+                  type: "other",
+                },
+              ],
+            })
+          }
+          onRemove={(id: string) =>
+            onUpdate({
+              sacrifices: yearlyData.sacrifices.filter((s: any) => s.id !== id),
+            })
+          }
+          onUpdateItem={(id: string, upd: any) =>
+            onUpdate({
+              sacrifices: yearlyData.sacrifices.map((s: any) =>
+                s.id === id ? { ...s, ...upd } : s,
+              ),
+            })
+          }
+          renderItem={(item: any, updateItem: any) => (
+            <div className="flex gap-2 w-full">
+              <Input
+                className="h-8 flex-1 text-xs"
+                value={item.name}
+                onChange={(e) => updateItem({ name: e.target.value })}
+              />
+              <Select
+                value={item.type}
+                onValueChange={(v: any) => updateItem({ type: v })}
+              >
+                <SelectTrigger className="h-8 w-24 text-[10px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pension">Pension</SelectItem>
+                  <SelectItem value="ev">EV</SelectItem>
+                  <SelectItem value="charity">Charity</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                placeholder="Amount"
+                className="h-8 w-20 text-xs"
+                value={item.amount || ""}
+                onChange={(e) => updateItem({ amount: Number(e.target.value) })}
+              />
+            </div>
+          )}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ListSection({
+  title,
+  items,
+  onAdd,
+  onRemove,
+  onUpdateItem,
+  renderItem,
+}: any) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </Label>
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onAdd}>
+          <Plus className="h-3 w-3" />
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {items.map((item: any) => (
+          <div key={item.id} className="flex items-center gap-2 group">
+            {renderItem(item, (upd: any) => onUpdateItem(item.id, upd))}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 opacity-0 group-hover:opacity-100"
+              onClick={() => onRemove(item.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SummarySection({ personName, details, threshold, year }: any) {
+  const adjustedNet = details.adjustedNetIncome;
+  return (
+    <div
+      className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
+    >
+      <h3 className="font-bold text-xl mb-4 border-b pb-2">
+        {personName} Summary
+      </h3>
       <div className="space-y-3">
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Adjusted Net Income:</span>
-          <span className={`font-bold ${adjustedNet > threshold ? 'text-destructive' : 'text-primary'}`}>
-            £{adjustedNet.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          <span
+            className={`font-bold ${adjustedNet > threshold ? "text-destructive" : "text-primary"}`}
+          >
+            £
+            {adjustedNet.toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}
           </span>
         </div>
         <div className="flex justify-between text-xs italic text-muted-foreground">
           <span>(Target for Childcare: &lt;£100k)</span>
           {adjustedNet > threshold ? (
-            <span className="text-destructive font-semibold">Over by £{(adjustedNet - threshold).toLocaleString()}</span>
+            <span className="text-destructive font-semibold">
+              Over by £{(adjustedNet - threshold).toLocaleString()}
+            </span>
           ) : (
-            <span className="text-green-600 font-semibold">Under threshold</span>
+            <span className="text-green-600 font-semibold text-xs flex items-center gap-1">
+              <ShieldCheck className="h-3 w-3" /> Eligible for Benefits
+            </span>
           )}
         </div>
         <div className="pt-4 border-t space-y-2">
           <div className="flex justify-between">
-            <span className="text-muted-foreground text-sm">Take-home (Est.):</span>
-            <span className="font-bold text-green-600">£{details.netIncome.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            <span className="text-muted-foreground text-sm">
+              Take-home (Est.):
+            </span>
+            <span className="font-bold text-green-600">
+              £
+              {details.netIncome.toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
           </div>
           <div className="flex justify-between text-[10px] text-muted-foreground pl-4">
             <span>Income Tax: -£{details.incomeTax.toLocaleString()}</span>
@@ -872,103 +1569,26 @@ function SummarySection({ personName, details, threshold, year }: { personName: 
         </div>
         <div className="pt-2 space-y-2">
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Pension Allowance Used:</span>
-            <span className={`font-semibold ${details.pensionExceeded ? "text-destructive" : "text-blue-600"}`}>
+            <span className="text-muted-foreground">
+              Pension Allowance Used:
+            </span>
+            <span
+              className={`font-semibold ${details.pensionExceeded ? "text-destructive" : "text-blue-600"}`}
+            >
               £{details.currentYearContribution.toLocaleString()}
             </span>
           </div>
           <div className="flex justify-between text-[10px] text-muted-foreground pl-4">
-            <span>Total Available: £{details.totalAllowanceAvailable.toLocaleString()}</span>
-            {details.pensionExceeded && <span className="text-destructive font-bold">EXCEEDS</span>}
+            <span>
+              Total Available: £
+              {details.totalAllowanceAvailable.toLocaleString()}
+            </span>
+            {details.pensionExceeded && (
+              <span className="text-destructive font-bold">EXCEEDS</span>
+            )}
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-interface PersonFormProps {
-  personNum: 1 | 2;
-  name: string;
-  onNameChange: (name: string) => void;
-  yearlyData: YearlyIncomeData;
-  onUpdate: (updates: Partial<YearlyIncomeData>) => void;
-  details: any;
-  year: string;
-}
-
-function PersonForm({ name, onNameChange, yearlyData, onUpdate, year }: PersonFormProps) {
-  const addBonus = () => onUpdate({ bonuses: [...yearlyData.bonuses, { id: crypto.randomUUID(), name: "New Bonus", type: "fixed", value: 0 }] });
-  const updateBonus = (id: string, updates: any) => onUpdate({ bonuses: yearlyData.bonuses.map(b => b.id === id ? { ...b, ...updates } : b) });
-  const removeBonus = (id: string) => onUpdate({ bonuses: yearlyData.bonuses.filter(b => b.id !== id) });
-
-  const addSacrifice = () => onUpdate({ sacrifices: [...yearlyData.sacrifices, { id: crypto.randomUUID(), name: "New Sacrifice", amount: 0, type: "other" }] });
-  const updateSacrifice = (id: string, updates: any) => onUpdate({ sacrifices: yearlyData.sacrifices.map(s => s.id === id ? { ...s, ...updates } : s) });
-  const removeSacrifice = (id: string) => onUpdate({ sacrifices: yearlyData.sacrifices.filter(s => s.id !== id) });
-
-  const addSavings = () => onUpdate({ savings: [...yearlyData.savings, { id: crypto.randomUUID(), name: "Account", balance: 0, interestRate: 0 }] });
-  const updateSavings = (id: string, updates: any) => onUpdate({ savings: yearlyData.savings.map(s => s.id === id ? { ...s, ...updates } : s) });
-  const removeSavings = (id: string) => onUpdate({ savings: yearlyData.savings.filter(s => s.id !== id) });
-
-  return (
-    <Card className="w-full h-full">
-      <CardHeader>
-        <Input className="text-2xl font-bold border-none p-0 focus-visible:ring-0 h-auto w-full" value={name} onChange={(e) => onNameChange(e.target.value)} />
-        <CardDescription>Income & Savings for {year}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6 text-left">
-        <div className="space-y-2">
-          <Label>Base Salary (£)</Label>
-          <Input type="number" value={yearlyData.baseSalary || ""} onChange={(e) => onUpdate({ baseSalary: Number(e.target.value) })} placeholder="e.g. 50000" />
-        </div>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between"><Label>Bonuses</Label><Button variant="outline" size="sm" onClick={addBonus}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
-          {yearlyData.bonuses.map(b => (
-            <div key={b.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
-              <div className="flex gap-2">
-                <Input className="flex-1 bg-transparent text-sm font-medium" value={b.name} onChange={(e) => updateBonus(b.id, { name: e.target.value })} placeholder="Bonus Name" />
-                <Button variant="ghost" size="icon" onClick={() => removeBonus(b.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-              </div>
-              <div className="flex gap-2">
-                <Input type="number" className="flex-1" value={b.value || ""} onChange={(e) => updateBonus(b.id, { value: Number(e.target.value) })} />
-                <select className="h-10 w-24 rounded-md border border-input px-3 py-2 text-sm bg-background" value={b.type} onChange={(e) => updateBonus(b.id, { type: e.target.value })}>
-                  <option value="fixed">£</option><option value="percentage">%</option>
-                </select>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2"><Label>Pension (%)</Label><Input type="number" value={yearlyData.employeePensionPercent || ""} onChange={(e) => onUpdate({ employeePensionPercent: Number(e.target.value) })} /></div>
-          <div className="space-y-2"><Label>Employer (%)</Label><Input type="number" value={yearlyData.employerPensionPercent || ""} onChange={(e) => onUpdate({ employerPensionPercent: Number(e.target.value) })} /></div>
-        </div>
-        <div className="space-y-4 border-t pt-4">
-          <div className="flex items-center justify-between"><Label className="text-base font-semibold">Sacrifices & Donations</Label><Button variant="outline" size="sm" onClick={addSacrifice}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
-          {yearlyData.sacrifices.map(s => (
-            <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
-              <div className="flex gap-2"><Input className="flex-1 bg-transparent" value={s.name} onChange={(e) => updateSacrifice(s.id, { name: e.target.value })} /><Button variant="ghost" size="icon" onClick={() => removeSacrifice(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
-              <div className="flex gap-2">
-                <Input type="number" className="flex-1" value={s.amount || ""} onChange={(e) => updateSacrifice(s.id, { amount: Number(e.target.value) })} />
-                <select className="h-10 w-32 rounded-md border border-input px-3 py-2 text-sm bg-background" value={s.type} onChange={(e) => updateSacrifice(s.id, { type: e.target.value })}>
-                  <option value="other">General</option><option value="pension">Pension</option><option value="ev">Electric Car</option><option value="charity">Gift Aid</option>
-                </select>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="space-y-4 border-t pt-4">
-          <div className="flex items-center justify-between"><Label className="text-base font-semibold">Savings Accounts</Label><Button variant="outline" size="sm" onClick={addSavings}><Plus className="h-4 w-4 mr-1" /> Add</Button></div>
-          {yearlyData.savings.map(s => (
-            <div key={s.id} className="space-y-2 p-3 bg-muted/30 rounded-lg">
-              <div className="flex gap-2"><Input className="flex-1 bg-transparent" value={s.name} onChange={(e) => updateSavings(s.id, { name: e.target.value })} /><Button variant="ghost" size="icon" onClick={() => removeSavings(s.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
-              <div className="flex gap-2">
-                <Input type="number" className="flex-1" placeholder="Balance" value={s.balance || ""} onChange={(e) => updateSavings(s.id, { balance: Number(e.target.value) })} />
-                <Input type="number" className="w-24" placeholder="Rate %" value={s.interestRate || ""} onChange={(e) => updateSavings(s.id, { interestRate: Number(e.target.value) })} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
   );
 }
