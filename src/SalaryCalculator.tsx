@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Card,
   CardContent,
@@ -9,7 +9,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, LogOut, Save, Calculator } from "lucide-react";
+
+interface AuthState {
+  token: string | null;
+  user: { id: string; email: string } | null;
+}
+
+const API_URL = "http://localhost:3001";
 
 interface Bonus {
   id: string;
@@ -68,6 +75,17 @@ const initialIncomeState = (defaultName: string): IncomeState => ({
 });
 
 export function SalaryCalculator() {
+  const [auth, setAuth] = useState<AuthState>(() => {
+    const saved = localStorage.getItem("babytax_auth");
+    return saved ? JSON.parse(saved) : { token: null, user: null };
+  });
+
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
   const [numPeople, setNumPeople] = useState<1 | 2>(1);
   const [person1, setPerson1] = useState<IncomeState>(
     initialIncomeState("Person 1"),
@@ -75,6 +93,137 @@ export function SalaryCalculator() {
   const [person2, setPerson2] = useState<IncomeState>(
     initialIncomeState("Person 2"),
   );
+
+  useEffect(() => {
+    if (auth.token) {
+      localStorage.setItem("babytax_auth", JSON.stringify(auth));
+      fetchData();
+    } else {
+      localStorage.removeItem("babytax_auth");
+    }
+  }, [auth]);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    const endpoint = isRegistering ? "/auth/register" : "/auth/login";
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAuth(data);
+    } catch (err: any) {
+      setAuthError(err.message);
+    }
+  };
+
+  const logout = () => {
+    setAuth({ token: null, user: null });
+    setPerson1(initialIncomeState("Person 1"));
+    setPerson2(initialIncomeState("Person 2"));
+    setNumPeople(1);
+  };
+
+  const fetchData = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/calculation`, {
+        headers: { Authorization: `Bearer ${auth.token}` },
+      });
+      const data = await res.json();
+      if (data.id) {
+        setNumPeople(data.numPeople);
+        setPerson1(data.person1Data);
+        if (data.person2Data) setPerson2(data.person2Data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch data", err);
+    }
+  };
+
+  const saveData = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/calculation`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({
+          numPeople,
+          person1Data: person1,
+          person2Data: numPeople === 2 ? person2 : null,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+    } catch (err) {
+      console.error("Save failed", err);
+      alert("Failed to save data");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!auth.token) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{isRegistering ? "Create Account" : "Login"}</CardTitle>
+            <CardDescription>
+              Access your baby tax calculator data securely.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleAuth} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                />
+              </div>
+              {authError && (
+                <p className="text-sm text-destructive font-medium">
+                  {authError}
+                </p>
+              )}
+              <Button type="submit" className="w-full">
+                {isRegistering ? "Register" : "Login"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => setIsRegistering(!isRegistering)}
+              >
+                {isRegistering
+                  ? "Already have an account? Login"
+                  : "Need an account? Register"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const updatePerson = (personNum: 1 | 2, updates: Partial<IncomeState>) => {
     if (personNum === 1) {
@@ -402,6 +551,28 @@ export function SalaryCalculator() {
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto px-4">
+      <div className="flex items-center justify-between bg-muted/30 p-4 rounded-lg">
+        <div className="flex items-center gap-2">
+          <Calculator className="h-5 w-5 text-primary" />
+          <span className="font-semibold text-sm">{auth.user?.email}</span>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={saveData}
+            disabled={isSaving}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {isSaving ? "Saving..." : "Save Data"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={logout}>
+            <LogOut className="h-4 w-4 mr-2" />
+            Logout
+          </Button>
+        </div>
+      </div>
+
       <div className="flex justify-center gap-4 mb-6">
         <Button
           variant={numPeople === 1 ? "default" : "outline"}

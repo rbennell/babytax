@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: babytax-db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: babytax
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: babytax-backend
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgres://user:password@db:5432/babytax
+      JWT_SECRET: super-secret-key-change-me
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

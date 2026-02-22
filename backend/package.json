@@ -1,0 +1,22 @@
+{
+  "name": "babytax-backend",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "db:push": "bun x drizzle-kit push",
+    "db:studio": "bun x drizzle-kit studio"
+  },
+  "dependencies": {
+    "hono": "latest",
+    "drizzle-orm": "latest",
+    "postgres": "latest",
+    "bcrypt": "latest",
+    "@types/bcrypt": "latest",
+    "jose": "latest"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "drizzle-kit": "latest"
+  }
+}
