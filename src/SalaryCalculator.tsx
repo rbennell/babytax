@@ -511,20 +511,23 @@ export function SalaryCalculator() {
       const hourlyRate = child.dailyCost / hoursPerDay;
       const weeklyHours = child.daysPerWeek * hoursPerDay;
 
+      // 30 hours * 38 weeks = 1140 hours per year entitlement
       const totalFreeHoursAvailable = 1140;
 
-      const benefitStart = child.benefitStartDate
+      // Define the period the child is attending childcare
+      const attendanceStart = child.benefitStartDate
         ? new Date(child.benefitStartDate)
         : taxYear.start;
-      const benefitEnd = child.benefitEndDate
+      const attendanceEnd = child.benefitEndDate
         ? new Date(child.benefitEndDate)
         : taxYear.end;
 
+      // Overlap of attendance with the current tax year
       const overlapStart = new Date(
-        Math.max(taxYear.start.getTime(), benefitStart.getTime()),
+        Math.max(taxYear.start.getTime(), attendanceStart.getTime()),
       );
       const overlapEnd = new Date(
-        Math.min(taxYear.end.getTime(), benefitEnd.getTime()),
+        Math.min(taxYear.end.getTime(), attendanceEnd.getTime()),
       );
 
       const overlapDays = Math.max(
@@ -537,32 +540,41 @@ export function SalaryCalculator() {
       const overlapWeeks = overlapDays / 7;
       const overlapYearFraction = overlapWeeks / 52;
 
-      const yearlyFullCost = child.dailyCost * child.daysPerWeek * 52;
+      // Total hours the child attends during the overlap with this tax year
+      const totalAttendingHours = weeklyHours * overlapWeeks;
 
+      // Costs for the overlap period (no benefits applied yet)
+      const costDuringOverlap = totalAttendingHours * hourlyRate;
+
+      // Benefit Calculation (30 Hours)
       const freeHoursInOverlap = isEligible
         ? totalFreeHoursAvailable * overlapYearFraction
         : 0;
-      const totalHoursInOverlap = weeklyHours * overlapWeeks;
-      const coveredHours = Math.min(totalHoursInOverlap, freeHoursInOverlap);
-      const remainingHoursInOverlap = totalHoursInOverlap - coveredHours;
+      const coveredHours = Math.min(totalAttendingHours, freeHoursInOverlap);
+      const remainingHoursInOverlap = totalAttendingHours - coveredHours;
 
-      const costInOverlap =
+      const costWith30Hours =
         coveredHours * child.topUpCost + remainingHoursInOverlap * hourlyRate;
-      const costOutsideOverlap = weeklyHours * (52 - overlapWeeks) * hourlyRate;
 
-      const costWith30Hours = costInOverlap + costOutsideOverlap;
-
+      // Tax-Free Childcare (TFC)
       let finalCostForChild = costWith30Hours;
       let tfcSaving = 0;
 
       if (child.useTaxFreeChildcare && isEligible) {
-        tfcSaving = Math.min(finalCostForChild * 0.2, 2000);
+        tfcSaving = Math.min(
+          finalCostForChild * 0.2,
+          2000 * overlapYearFraction,
+        );
         finalCostForChild -= tfcSaving;
       }
 
-      totalFullYear += yearlyFullCost;
+      totalFullYear += costDuringOverlap;
       totalWithBenefits += finalCostForChild;
       totalTaxFreeSavings += tfcSaving;
+
+      // Store individual child hours for the return object if needed, but for now we aggregate
+      child.totalAttendingHours = totalAttendingHours;
+      child.totalFreeHours = coveredHours;
     });
 
     return {
@@ -570,6 +582,14 @@ export function SalaryCalculator() {
       actual: totalWithBenefits,
       savings: totalFullYear - totalWithBenefits,
       taxFreeSavings: totalTaxFreeSavings,
+      totalAttendingHours: childcare.children.reduce(
+        (sum, c: any) => sum + (c.totalAttendingHours || 0),
+        0,
+      ),
+      totalFreeHours: childcare.children.reduce(
+        (sum, c: any) => sum + (c.totalFreeHours || 0),
+        0,
+      ),
     };
   };
 
@@ -597,72 +617,6 @@ export function SalaryCalculator() {
         (simulatedDetails.incomeTax + simulatedDetails.ni);
       const takeHomeLoss = details.netIncome - simulatedDetails.netIncome;
       return { sacrificeNeeded, taxSaved, takeHomeLoss };
-    };
-
-    const p1Analysis = analyzePerson(person1, p1Details);
-    const p2Analysis =
-      numPeople === 2 ? analyzePerson(person2, p2Details) : null;
-
-    // Potential childcare savings if both were under threshold
-    const calculateChildcareForYear = (
-      yearStr: string,
-      isEligible: boolean,
-    ) => {
-      let totalFullYear = 0;
-      let totalWithBenefits = 0;
-      const tYear = getTaxYearDates(yearStr);
-
-      childcare.children.forEach((child) => {
-        const hoursPerDay = child.hoursPerDay || 10;
-        const hourlyRate = child.dailyCost / hoursPerDay;
-        const weeklyHours = child.daysPerWeek * hoursPerDay;
-        const totalFreeHoursAvailable = 1140;
-
-        const benefitStart = child.benefitStartDate
-          ? new Date(child.benefitStartDate)
-          : tYear.start;
-        const benefitEnd = child.benefitEndDate
-          ? new Date(child.benefitEndDate)
-          : tYear.end;
-
-        const overlapStart = new Date(
-          Math.max(tYear.start.getTime(), benefitStart.getTime()),
-        );
-        const overlapEnd = new Date(
-          Math.min(tYear.end.getTime(), benefitEnd.getTime()),
-        );
-
-        const overlapDays = Math.max(
-          0,
-          Math.ceil(
-            (overlapEnd.getTime() - overlapStart.getTime()) /
-              (1000 * 60 * 60 * 24),
-          ) + 1,
-        );
-        const overlapWeeks = overlapDays / 7;
-        const overlapYearFraction = overlapWeeks / 52;
-
-        const yearlyFullCost = child.dailyCost * child.daysPerWeek * 52;
-        const freeHoursInOverlap = isEligible
-          ? totalFreeHoursAvailable * overlapYearFraction
-          : 0;
-        const totalHoursInOverlap = weeklyHours * overlapWeeks;
-        const coveredHours = Math.min(totalHoursInOverlap, freeHoursInOverlap);
-        const remainingHoursInOverlap = totalHoursInOverlap - coveredHours;
-
-        const costInOverlap =
-          coveredHours * child.topUpCost + remainingHoursInOverlap * hourlyRate;
-        const costOutsideOverlap =
-          weeklyHours * (52 - overlapWeeks) * hourlyRate;
-        let finalCostForChild = costInOverlap + costOutsideOverlap;
-
-        if (child.useTaxFreeChildcare && isEligible) {
-          finalCostForChild -= Math.min(finalCostForChild * 0.2, 2000);
-        }
-        totalFullYear += yearlyFullCost;
-        totalWithBenefits += finalCostForChild;
-      });
-      return totalFullYear - totalWithBenefits;
     };
 
     const potentialChildcareSaving = calculateChildcareForYear(
@@ -1015,7 +969,7 @@ export function SalaryCalculator() {
                   No children added.
                 </p>
               )}
-              {childcare.children.map((child) => (
+              {childcare.children.map((child: any) => (
                 <div
                   key={child.id}
                   className="space-y-3 p-3 bg-muted/30 rounded-lg border border-border relative group"
@@ -1037,7 +991,7 @@ export function SalaryCalculator() {
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <Label className="text-[10px]">Benefit Start</Label>
+                      <Label className="text-[10px]">Active Start</Label>
                       <Input
                         type="date"
                         className="h-8 text-xs"
@@ -1050,7 +1004,7 @@ export function SalaryCalculator() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-[10px]">Benefit End</Label>
+                      <Label className="text-[10px]">Active End</Label>
                       <Input
                         type="date"
                         className="h-8 text-xs"
@@ -1132,9 +1086,33 @@ export function SalaryCalculator() {
                       />
                     </div>
                   </div>
+                  {child.totalAttendingHours > 0 && (
+                    <div className="pt-2 border-t border-border/50 flex justify-between text-[10px] text-muted-foreground italic">
+                      <span>
+                        Total: {Math.round(child.totalAttendingHours)} hrs
+                      </span>
+                      {isEligibleForFreeChildcare && (
+                        <span>
+                          Free: {Math.round(child.totalFreeHours)} hrs
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               <div className="pt-4 border-t space-y-2">
+                <div className="flex justify-between text-[10px] text-muted-foreground italic mb-1">
+                  <span>
+                    Household Total:{" "}
+                    {Math.round(childcareCosts.totalAttendingHours || 0)} hrs
+                  </span>
+                  {isEligibleForFreeChildcare && (
+                    <span>
+                      Household Free:{" "}
+                      {Math.round(childcareCosts.totalFreeHours || 0)} hrs
+                    </span>
+                  )}
+                </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">
                     Full Yearly Cost:
