@@ -75,6 +75,7 @@ interface IncomeState {
 interface ChildcareChild {
   id: string;
   name: string;
+  birthDate: string;
   daysPerWeek: number;
   hoursPerDay: number;
   dailyCost: number;
@@ -82,6 +83,8 @@ interface ChildcareChild {
   benefitStartDate: string;
   benefitEndDate: string;
   useTaxFreeChildcare: boolean;
+  totalAttendingHours?: number;
+  totalFreeHours?: number;
 }
 
 interface ChildcareData {
@@ -465,6 +468,49 @@ export function SalaryCalculator() {
       }
     }
 
+    // Calculate baseline take-home (0 pension, 0 sacrifice)
+    const baselineTaxableIncome = totalGross;
+    let baselinePA = config.personalAllowance;
+    if (baselineTaxableIncome > 100000)
+      baselinePA = Math.max(
+        0,
+        baselinePA - (baselineTaxableIncome - 100000) / 2,
+      );
+
+    let baselineIncomeTax = 0;
+    if (baselineTaxableIncome > baselinePA) {
+      const basic = Math.min(
+        baselineTaxableIncome - baselinePA,
+        config.basicRateLimit,
+      );
+      baselineIncomeTax += basic * 0.2;
+      if (baselineTaxableIncome > baselinePA + config.basicRateLimit) {
+        const higher = Math.min(
+          baselineTaxableIncome - (baselinePA + config.basicRateLimit),
+          config.higherRateLimit - config.basicRateLimit,
+        );
+        baselineIncomeTax += higher * 0.4;
+        if (baselineTaxableIncome > config.higherRateLimit + baselinePA) {
+          baselineIncomeTax +=
+            (baselineTaxableIncome - (config.higherRateLimit + baselinePA)) *
+            0.45;
+        }
+      }
+    }
+
+    let baselineNI = 0;
+    const baselineNIable = totalGross - savingsInterest;
+    if (baselineNIable > config.niPt) {
+      baselineNI +=
+        Math.min(baselineNIable - config.niPt, config.niUel - config.niPt) *
+        config.niRate1;
+      if (baselineNIable > config.niUel)
+        baselineNI += (baselineNIable - config.niUel) * config.niRate2;
+    }
+
+    const baselineTakeHome =
+      baselineTaxableIncome - baselineIncomeTax - baselineNI;
+
     return {
       netIncome: taxableIncome - incomeTax - ni - giftAidRaw,
       incomeTax,
@@ -479,6 +525,8 @@ export function SalaryCalculator() {
       carryForward,
       carryForwardBreakdown: breakdown,
       interest: savingsInterest,
+      grossSalary: totalGross,
+      baselineTakeHome,
     };
   };
 
@@ -499,20 +547,47 @@ export function SalaryCalculator() {
     };
   };
 
-  const calculateChildcareForEligibility = (isEligible: boolean) => {
+  const calculateChildcareForEligibility = (
+    isEligible: boolean,
+    yearStr: string,
+  ) => {
     let totalFullYear = 0;
     let totalWithBenefits = 0;
     let totalTaxFreeSavings = 0;
 
-    const taxYear = getTaxYearDates(selectedYear);
+    const taxYear = getTaxYearDates(yearStr);
 
     childcare.children.forEach((child) => {
       const hoursPerDay = child.hoursPerDay || 10;
       const hourlyRate = child.dailyCost / hoursPerDay;
       const weeklyHours = child.daysPerWeek * hoursPerDay;
 
-      // 30 hours * 38 weeks = 1140 hours per year entitlement
-      const totalFreeHoursAvailable = 1140;
+      // Calculate child's age during the tax year to determine benefit eligibility
+      // UK Free Childcare Rules:
+      // 1. Working Parents (income <£100k): 30 hours for 9 months to 4 years old
+      // 2. Universal: 15 hours for ALL 3-4 year olds (no income restriction)
+      let totalFreeHoursAvailable = 0;
+      if (child.birthDate) {
+        const birthDate = new Date(child.birthDate);
+        const taxYearStart = taxYear.start;
+        const taxYearEnd = taxYear.end;
+
+        // Calculate age in months at end of tax year
+        const ageMonthsAtEnd =
+          (taxYearEnd.getTime() - birthDate.getTime()) /
+          (1000 * 60 * 60 * 24 * 30.44);
+        const ageYearsAtEnd = ageMonthsAtEnd / 12;
+
+        // Determine which benefit tier applies
+        if (isEligible && ageMonthsAtEnd >= 9 && ageYearsAtEnd < 4) {
+          // Working Parents scheme: 30 hours for 9 months to 4 years (income <£100k)
+          totalFreeHoursAvailable = 1140; // 30 hours * 38 weeks
+        } else if (ageYearsAtEnd >= 3 && ageYearsAtEnd < 4) {
+          // Universal scheme: 15 hours for ALL 3-4 year olds (no income check)
+          totalFreeHoursAvailable = 570; // 15 hours * 38 weeks
+        }
+        // If under 9 months or 4+ years, totalFreeHoursAvailable remains 0
+      }
 
       // Define the period the child is attending childcare
       const attendanceStart = child.benefitStartDate
@@ -546,10 +621,8 @@ export function SalaryCalculator() {
       // Costs for the overlap period (no benefits applied yet)
       const costDuringOverlap = totalAttendingHours * hourlyRate;
 
-      // Benefit Calculation (30 Hours)
-      const freeHoursInOverlap = isEligible
-        ? totalFreeHoursAvailable * overlapYearFraction
-        : 0;
+      // Benefit Calculation (age-based hours)
+      const freeHoursInOverlap = totalFreeHoursAvailable * overlapYearFraction;
       const coveredHours = Math.min(totalAttendingHours, freeHoursInOverlap);
       const remainingHoursInOverlap = totalAttendingHours - coveredHours;
 
@@ -594,7 +667,11 @@ export function SalaryCalculator() {
   };
 
   const childcareCosts = useMemo(
-    () => calculateChildcareForEligibility(isEligibleForFreeChildcare),
+    () =>
+      calculateChildcareForEligibility(
+        isEligibleForFreeChildcare,
+        selectedYear,
+      ),
     [childcare.children, isEligibleForFreeChildcare, selectedYear],
   );
 
@@ -615,14 +692,27 @@ export function SalaryCalculator() {
         details.incomeTax +
         details.ni -
         (simulatedDetails.incomeTax + simulatedDetails.ni);
-      const takeHomeLoss = details.netIncome - simulatedDetails.netIncome;
-      return { sacrificeNeeded, taxSaved, takeHomeLoss };
+      const originalTakeHome = details.netIncome;
+      const newTakeHome = simulatedDetails.netIncome;
+      const takeHomeLoss = originalTakeHome - newTakeHome;
+      return {
+        sacrificeNeeded,
+        taxSaved,
+        takeHomeLoss,
+        originalTakeHome,
+        newTakeHome,
+      };
     };
 
-    const potentialChildcareSaving = calculateChildcareForYear(
-      selectedYear,
+    const p1Analysis = analyzePerson(person1, p1Details);
+    const p2Analysis =
+      numPeople === 2 ? analyzePerson(person2, p2Details) : null;
+
+    const costsWithEligibility = calculateChildcareForEligibility(
       true,
+      selectedYear,
     );
+    const potentialChildcareSaving = costsWithEligibility.savings;
 
     // Look ahead to next year if sacrifice is applied
     const nextYearIdx = TAX_YEARS.indexOf(selectedYear) + 1;
@@ -632,7 +722,11 @@ export function SalaryCalculator() {
       const label = TAX_YEARS[nextYearIdx];
       if (label) {
         nextYearLabel = label;
-        nextYearSaving = calculateChildcareForYear(nextYearLabel, true);
+        const nextYearCosts = calculateChildcareForEligibility(
+          true,
+          nextYearLabel,
+        );
+        nextYearSaving = nextYearCosts.savings;
       }
     }
 
@@ -720,6 +814,7 @@ export function SalaryCalculator() {
         {
           id: crypto.randomUUID(),
           name: `Child ${prev.children.length + 1}`,
+          birthDate: "",
           daysPerWeek: 0,
           hoursPerDay: 10,
           dailyCost: 0,
@@ -878,11 +973,30 @@ export function SalaryCalculator() {
                               +£{item.analysis.taxSaved.toLocaleString()}
                             </span>
                           </div>
-                          <div className="flex justify-between">
-                            <span>Take-home Reduction:</span>
-                            <span className="font-semibold text-destructive">
-                              -£{item.analysis.takeHomeLoss.toLocaleString()}
-                            </span>
+                          <div className="pt-2 border-t border-amber-100 space-y-2">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                Current take-home:
+                              </span>
+                              <span className="font-medium">
+                                £
+                                {item.analysis.originalTakeHome.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                New take-home:
+                              </span>
+                              <span className="font-medium">
+                                £{item.analysis.newTakeHome.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="flex justify-between font-semibold">
+                              <span>Net change:</span>
+                              <span className="text-destructive">
+                                -£{item.analysis.takeHomeLoss.toLocaleString()}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       ),
@@ -989,6 +1103,19 @@ export function SalaryCalculator() {
                       updateChild(child.id, { name: e.target.value })
                     }
                   />
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Birth Date</Label>
+                    <Input
+                      type="date"
+                      className="h-8 text-xs"
+                      value={child.birthDate}
+                      onChange={(e) =>
+                        updateChild(child.id, {
+                          birthDate: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
                       <Label className="text-[10px]">Active Start</Label>
@@ -1497,6 +1624,8 @@ function ListSection({
 
 function SummarySection({ personName, details, threshold, year }: any) {
   const adjustedNet = details.adjustedNetIncome;
+  const takeHomeDifference = details.netIncome - details.baselineTakeHome;
+
   return (
     <div
       className={`p-6 rounded-lg ${adjustedNet > threshold ? "bg-destructive/10 border border-destructive/20" : "bg-green-500/10 border border-green-500/20"}`}
@@ -1505,6 +1634,15 @@ function SummarySection({ personName, details, threshold, year }: any) {
         {personName} Summary
       </h3>
       <div className="space-y-3">
+        <div className="flex justify-between text-sm">
+          <span className="text-muted-foreground">Gross Salary:</span>
+          <span className="font-bold text-primary">
+            £
+            {details.grossSalary.toLocaleString(undefined, {
+              maximumFractionDigits: 0,
+            })}
+          </span>
+        </div>
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Adjusted Net Income:</span>
           <span
@@ -1543,6 +1681,19 @@ function SummarySection({ personName, details, threshold, year }: any) {
           <div className="flex justify-between text-[10px] text-muted-foreground pl-4">
             <span>Income Tax: -£{details.incomeTax.toLocaleString()}</span>
             <span>NI: -£{details.ni.toLocaleString()}</span>
+          </div>
+          <div className="flex justify-between text-xs mt-2 pt-2 border-t border-muted">
+            <span className="text-muted-foreground">
+              vs. Baseline (0 pension, 0 sacrifice):
+            </span>
+            <span
+              className={`font-semibold ${takeHomeDifference < 0 ? "text-destructive" : "text-green-600"}`}
+            >
+              {takeHomeDifference < 0 ? "-" : "+"}£
+              {Math.abs(takeHomeDifference).toLocaleString(undefined, {
+                maximumFractionDigits: 0,
+              })}
+            </span>
           </div>
         </div>
         <div className="pt-2 space-y-2">
