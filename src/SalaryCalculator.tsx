@@ -57,6 +57,20 @@ interface SalarySacrifice {
   type: "pension" | "ev" | "charity" | "other";
 }
 
+interface MonthlyExpense {
+  id: string;
+  name: string;
+  amount: number;
+  type: "bills" | "other";
+}
+
+interface MortgageData {
+  totalMortgage: number;
+  monthlyPayment: number;
+  overpayment: number;
+  interestRate: number;
+}
+
 interface YearlyIncomeData {
   baseSalary: number;
   bonuses: Bonus[];
@@ -65,6 +79,8 @@ interface YearlyIncomeData {
   employerPensionPercent: number;
   savings: SavingsAccount[];
   sacrifices: SalarySacrifice[];
+  monthlyExpenses: MonthlyExpense[];
+  mortgage: MortgageData;
 }
 
 interface IncomeState {
@@ -205,7 +221,35 @@ const initialYearlyData = (): YearlyIncomeData => ({
   employerPensionPercent: 0,
   savings: [],
   sacrifices: [],
+  monthlyExpenses: [],
+  mortgage: {
+    totalMortgage: 0,
+    monthlyPayment: 0,
+    overpayment: 0,
+    interestRate: 0,
+  },
 });
+
+const ensureYearlyData = (data?: YearlyIncomeData): YearlyIncomeData => ({
+  ...initialYearlyData(),
+  ...data,
+  monthlyExpenses: data?.monthlyExpenses ?? [],
+  mortgage: {
+    ...initialYearlyData().mortgage,
+    ...(data?.mortgage ?? {}),
+  },
+});
+
+const sumMonthlyExpenses = (data?: YearlyIncomeData) =>
+  ensureYearlyData(data).monthlyExpenses.reduce(
+    (sum, expense) => sum + (expense?.amount || 0),
+    0,
+  );
+
+const sumMortgageAnnual = (data?: YearlyIncomeData) => {
+  const yearly = ensureYearlyData(data).mortgage;
+  return (yearly.monthlyPayment + yearly.overpayment) * 12;
+};
 
 const initialIncomeState = (defaultName: string): IncomeState => ({
   name: defaultName,
@@ -745,7 +789,24 @@ export function SalaryCalculator() {
 
   const totalTakeHome =
     p1Details.netIncome + (numPeople === 2 ? p2Details.netIncome : 0);
-  const netAfterChildcare = totalTakeHome - childcareCosts.actual;
+
+  const p1MonthlyExpenses = sumMonthlyExpenses(
+    person1.yearlyData[selectedYear],
+  );
+  const p2MonthlyExpenses =
+    numPeople === 2 ? sumMonthlyExpenses(person2.yearlyData[selectedYear]) : 0;
+  const totalMonthlyExpenses = (p1MonthlyExpenses + p2MonthlyExpenses) * 12;
+
+  const p1MortgageAnnual = sumMortgageAnnual(person1.yearlyData[selectedYear]);
+  const p2MortgageAnnual =
+    numPeople === 2 ? sumMortgageAnnual(person2.yearlyData[selectedYear]) : 0;
+  const totalMortgageAnnual = p1MortgageAnnual + p2MortgageAnnual;
+
+  const netAfterChildcare =
+    totalTakeHome -
+    childcareCosts.actual -
+    totalMonthlyExpenses -
+    totalMortgageAnnual;
 
   const savingsAnalysis = useMemo(() => {
     const analyzePerson = (person: IncomeState, details: any) => {
@@ -1599,6 +1660,28 @@ export function SalaryCalculator() {
                     })}
                   </span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground text-sm">
+                    Monthly Expenses:
+                  </span>
+                  <span className="font-bold text-destructive">
+                    - £
+                    {totalMonthlyExpenses.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground text-sm">
+                    Mortgage Payments:
+                  </span>
+                  <span className="font-bold text-destructive">
+                    - £
+                    {totalMortgageAnnual.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>
+                </div>
                 <div className="pt-4 border-t flex justify-between items-center">
                   <span className="font-bold">Disposable:</span>
                   <span className="font-extrabold text-2xl text-primary">
@@ -1616,9 +1699,9 @@ export function SalaryCalculator() {
 
       <Card className="mt-8">
         <CardHeader>
-          <CardTitle>3-Year Financial Overview</CardTitle>
+          <CardTitle>5-Year Financial Overview</CardTitle>
           <CardDescription>
-            Compare previous, current, and next year projections
+            Compare financial projections across 5 years
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1630,17 +1713,21 @@ export function SalaryCalculator() {
                   {(() => {
                     const currentIdx = TAX_YEARS.indexOf(selectedYear);
                     const years = [
+                      currentIdx > 1 ? TAX_YEARS[currentIdx - 2] : null,
                       currentIdx > 0 ? TAX_YEARS[currentIdx - 1] : null,
                       selectedYear,
                       currentIdx < TAX_YEARS.length - 1
                         ? TAX_YEARS[currentIdx + 1]
+                        : null,
+                      currentIdx < TAX_YEARS.length - 2
+                        ? TAX_YEARS[currentIdx + 2]
                         : null,
                     ];
                     return years.map((year, idx) =>
                       year ? (
                         <th
                           key={year}
-                          className={`text-right py-3 px-2 font-semibold ${idx === 1 ? "bg-primary/10" : ""}`}
+                          className={`text-right py-3 px-2 font-semibold ${idx === 2 ? "bg-primary/10" : ""}`}
                         >
                           {year}
                         </th>
@@ -1653,10 +1740,14 @@ export function SalaryCalculator() {
                 {(() => {
                   const currentIdx = TAX_YEARS.indexOf(selectedYear);
                   const years = [
+                    currentIdx > 1 ? TAX_YEARS[currentIdx - 2] : null,
                     currentIdx > 0 ? TAX_YEARS[currentIdx - 1] : null,
                     selectedYear,
                     currentIdx < TAX_YEARS.length - 1
                       ? TAX_YEARS[currentIdx + 1]
+                      : null,
+                    currentIdx < TAX_YEARS.length - 2
+                      ? TAX_YEARS[currentIdx + 2]
                       : null,
                   ];
 
@@ -1690,7 +1781,33 @@ export function SalaryCalculator() {
                       isEligible,
                       year,
                     );
-                    const disposable = totalTakeHome - childcareCost.actual;
+
+                    // Calculate expenses and mortgage for this year
+                    const p1YearData = ensureYearlyData(
+                      person1.yearlyData[year],
+                    );
+                    const p2YearData = ensureYearlyData(
+                      person2.yearlyData[year],
+                    );
+
+                    const yearMonthlyExpenses =
+                      (sumMonthlyExpenses(person1.yearlyData[year]) +
+                        (numPeople === 2
+                          ? sumMonthlyExpenses(person2.yearlyData[year])
+                          : 0)) *
+                      12;
+
+                    const yearMortgage =
+                      sumMortgageAnnual(person1.yearlyData[year]) +
+                      (numPeople === 2
+                        ? sumMortgageAnnual(person2.yearlyData[year])
+                        : 0);
+
+                    const disposable =
+                      totalTakeHome -
+                      childcareCost.actual -
+                      yearMonthlyExpenses -
+                      yearMortgage;
 
                     return {
                       totalGross,
@@ -1698,6 +1815,8 @@ export function SalaryCalculator() {
                       childcareCostFull: childcareCost.full,
                       childcareCostActual: childcareCost.actual,
                       totalPension,
+                      monthlyExpenses: yearMonthlyExpenses,
+                      mortgage: yearMortgage,
                       disposable,
                     };
                   });
@@ -1712,7 +1831,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                              className={`text-right py-3 px-2 ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
                             >
                               £
                               {data.totalGross.toLocaleString(undefined, {
@@ -1730,7 +1849,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 text-blue-600 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                              className={`text-right py-3 px-2 text-blue-600 ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
                             >
                               £
                               {data.totalPension.toLocaleString(undefined, {
@@ -1748,7 +1867,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 text-green-600 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                              className={`text-right py-3 px-2 text-green-600 ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
                             >
                               £
                               {data.totalTakeHome.toLocaleString(undefined, {
@@ -1766,7 +1885,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 text-muted-foreground line-through ${idx === 1 ? "bg-primary/10" : ""}`}
+                              className={`text-right py-3 px-2 text-muted-foreground line-through ${idx === 2 ? "bg-primary/10" : ""}`}
                             >
                               £
                               {data.childcareCostFull.toLocaleString(
@@ -1787,7 +1906,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 text-destructive ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                              className={`text-right py-3 px-2 text-destructive ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
                             >
                               £
                               {data.childcareCostActual.toLocaleString(
@@ -1800,6 +1919,42 @@ export function SalaryCalculator() {
                           ) : null,
                         )}
                       </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Monthly Expenses (Annual)
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-destructive ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.monthlyExpenses.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Mortgage Payments (Annual)
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-destructive ${idx === 2 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.mortgage.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
                       <tr className="border-b-2 border-primary/20 hover:bg-muted/50">
                         <td className="py-3 px-2 font-bold">
                           Disposable Income
@@ -1808,7 +1963,7 @@ export function SalaryCalculator() {
                           data ? (
                             <td
                               key={idx}
-                              className={`text-right py-3 px-2 font-bold text-primary text-lg ${idx === 1 ? "bg-primary/10" : ""}`}
+                              className={`text-right py-3 px-2 font-bold text-primary text-lg ${idx === 2 ? "bg-primary/10" : ""}`}
                             >
                               £
                               {data.disposable.toLocaleString(undefined, {
@@ -2097,6 +2252,149 @@ function PersonForm({
             </div>
           )}
         />
+        <ListSection
+          title="Monthly Expenses"
+          items={yearlyData.monthlyExpenses || []}
+          onAdd={() =>
+            onUpdate({
+              monthlyExpenses: [
+                ...(yearlyData.monthlyExpenses || []),
+                {
+                  id: crypto.randomUUID(),
+                  name: "Expense",
+                  amount: 0,
+                  type: "bills",
+                },
+              ],
+            })
+          }
+          onRemove={(id: string) =>
+            onUpdate({
+              monthlyExpenses: (yearlyData.monthlyExpenses || []).filter(
+                (e: any) => e.id !== id,
+              ),
+            })
+          }
+          onUpdateItem={(id: string, upd: any) =>
+            onUpdate({
+              monthlyExpenses: (yearlyData.monthlyExpenses || []).map(
+                (e: any) => (e.id === id ? { ...e, ...upd } : e),
+              ),
+            })
+          }
+          renderItem={(item: any, updateItem: any) => (
+            <div className="flex gap-2 w-full">
+              <Input
+                className="h-8 flex-1 text-xs"
+                placeholder="Name"
+                value={item.name}
+                onChange={(e) => updateItem({ name: e.target.value })}
+              />
+              <Select
+                value={item.type}
+                onValueChange={(v: any) => updateItem({ type: v })}
+              >
+                <SelectTrigger className="h-8 w-24 text-[10px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bills">Bills</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                type="number"
+                placeholder="£/month"
+                className="h-8 w-24 text-xs"
+                value={item.amount || ""}
+                onChange={(e) => updateItem({ amount: Number(e.target.value) })}
+              />
+            </div>
+          )}
+        />
+        <div className="space-y-2 pt-2">
+          <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            Mortgage
+          </Label>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Total Mortgage
+              </Label>
+              <Input
+                type="number"
+                placeholder="£"
+                className="h-8 text-xs"
+                value={yearlyData.mortgage?.totalMortgage || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    mortgage: {
+                      ...(yearlyData.mortgage || {}),
+                      totalMortgage: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Interest Rate (%)
+              </Label>
+              <Input
+                type="number"
+                placeholder="%"
+                className="h-8 text-xs"
+                value={yearlyData.mortgage?.interestRate || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    mortgage: {
+                      ...(yearlyData.mortgage || {}),
+                      interestRate: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Monthly Payment
+              </Label>
+              <Input
+                type="number"
+                placeholder="£/month"
+                className="h-8 text-xs"
+                value={yearlyData.mortgage?.monthlyPayment || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    mortgage: {
+                      ...(yearlyData.mortgage || {}),
+                      monthlyPayment: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Overpayment
+              </Label>
+              <Input
+                type="number"
+                placeholder="£/month"
+                className="h-8 text-xs"
+                value={yearlyData.mortgage?.overpayment || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    mortgage: {
+                      ...(yearlyData.mortgage || {}),
+                      overpayment: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
