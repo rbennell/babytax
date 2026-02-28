@@ -64,11 +64,17 @@ interface MonthlyExpense {
   type: "bills" | "other";
 }
 
-interface MortgageData {
-  totalMortgage: number;
+interface MortgageEntry {
+  id: string;
+  date: string; // YYYY-MM-DD format
+  amount: number;
+  interestRate: number;
   monthlyPayment: number;
   overpayment: number;
-  interestRate: number;
+}
+
+interface MortgageData {
+  entries: MortgageEntry[];
 }
 
 interface MaternityLeave {
@@ -230,10 +236,7 @@ const initialYearlyData = (): YearlyIncomeData => ({
   sacrifices: [],
   monthlyExpenses: [],
   mortgage: {
-    totalMortgage: 0,
-    monthlyPayment: 0,
-    overpayment: 0,
-    interestRate: 0,
+    entries: [],
   },
 });
 
@@ -242,8 +245,7 @@ const ensureYearlyData = (data?: YearlyIncomeData): YearlyIncomeData => ({
   ...data,
   monthlyExpenses: data?.monthlyExpenses ?? [],
   mortgage: {
-    ...initialYearlyData().mortgage,
-    ...(data?.mortgage ?? {}),
+    entries: data?.mortgage?.entries ?? [],
   },
 });
 
@@ -253,9 +255,98 @@ const sumMonthlyExpenses = (data?: YearlyIncomeData) =>
     0,
   );
 
-const sumMortgageAnnual = (data?: YearlyIncomeData) => {
-  const yearly = ensureYearlyData(data).mortgage;
-  return (yearly.monthlyPayment + yearly.overpayment) * 12;
+// Get the most recent mortgage entry on or before a given date
+const getActiveMortgageEntry = (
+  mortgageData: MortgageData,
+  targetDate: string,
+): MortgageEntry | null => {
+  const entries = mortgageData.entries
+    .filter((e) => e.date <= targetDate)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return entries[0] || null;
+};
+
+// Calculate remaining mortgage balance at a given date
+const calculateMortgageBalance = (
+  person1: IncomeState,
+  person2: IncomeState,
+  numPeople: number,
+  targetYear: string,
+): number => {
+  // Get all mortgage entries from both people, sorted by date
+  const allEntries: Array<MortgageEntry & { person: 1 | 2 }> = [];
+
+  Object.entries(person1.yearlyData).forEach(([year, data]) => {
+    data.mortgage?.entries?.forEach((entry) => {
+      allEntries.push({ ...entry, person: 1 });
+    });
+  });
+
+  if (numPeople === 2) {
+    Object.entries(person2.yearlyData).forEach(([year, data]) => {
+      data.mortgage?.entries?.forEach((entry) => {
+        allEntries.push({ ...entry, person: 2 });
+      });
+    });
+  }
+
+  allEntries.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Find the most recent entry with an amount (this is the starting balance)
+  // We look for the absolute most recent entry, not limited by target year
+  const startEntry = [...allEntries].reverse().find((e) => e.amount > 0);
+
+  if (!startEntry) return 0;
+
+  let balance = startEntry.amount;
+  const startDate = new Date(startEntry.date);
+  const targetDate = new Date(`${targetYear.split("/")[0]}-04-06`);
+
+  // Calculate months between start and target
+  const monthsDiff =
+    (targetDate.getFullYear() - startDate.getFullYear()) * 12 +
+    (targetDate.getMonth() - startDate.getMonth());
+
+  // If target is before or at the start date, return the starting balance
+  if (monthsDiff <= 0) return balance;
+
+  // Apply monthly payments and interest using the most recent entry's rates
+  const monthlyRate = startEntry.interestRate / 100 / 12;
+  const monthlyPayment = startEntry.monthlyPayment + startEntry.overpayment;
+
+  for (let i = 0; i < monthsDiff; i++) {
+    balance = balance * (1 + monthlyRate) - monthlyPayment;
+    if (balance <= 0) return 0;
+  }
+
+  return Math.max(0, balance);
+};
+
+// Get the most recent mortgage entry from a person's data (across all years)
+const getMostRecentMortgageEntry = (
+  person: IncomeState,
+): MortgageEntry | null => {
+  const allEntries: MortgageEntry[] = [];
+
+  Object.values(person.yearlyData).forEach((data) => {
+    if (data.mortgage?.entries) {
+      allEntries.push(...data.mortgage.entries);
+    }
+  });
+
+  if (allEntries.length === 0) return null;
+
+  // Sort by date descending and return the most recent
+  allEntries.sort((a, b) => b.date.localeCompare(a.date));
+  return allEntries[0] ?? null;
+};
+
+const sumMortgageAnnual = (person: IncomeState, year: string = "2025/26") => {
+  const mostRecentEntry = getMostRecentMortgageEntry(person);
+
+  if (!mostRecentEntry) return 0;
+
+  return (mostRecentEntry.monthlyPayment + mostRecentEntry.overpayment) * 12;
 };
 
 const initialIncomeState = (defaultName: string): IncomeState => ({
@@ -277,6 +368,9 @@ interface PersonFormProps {
   onUpdate: (updates: Partial<YearlyIncomeData>) => void;
   details: any;
   year: string;
+  person1: IncomeState;
+  person2: IncomeState;
+  numPeople: number;
 }
 
 export function SalaryCalculator() {
@@ -840,9 +934,9 @@ export function SalaryCalculator() {
     numPeople === 2 ? sumMonthlyExpenses(person2.yearlyData[selectedYear]) : 0;
   const totalMonthlyExpenses = (p1MonthlyExpenses + p2MonthlyExpenses) * 12;
 
-  const p1MortgageAnnual = sumMortgageAnnual(person1.yearlyData[selectedYear]);
+  const p1MortgageAnnual = sumMortgageAnnual(person1, selectedYear);
   const p2MortgageAnnual =
-    numPeople === 2 ? sumMortgageAnnual(person2.yearlyData[selectedYear]) : 0;
+    numPeople === 2 ? sumMortgageAnnual(person2, selectedYear) : 0;
   const totalMortgageAnnual = p1MortgageAnnual + p2MortgageAnnual;
 
   const netAfterChildcare =
@@ -1085,6 +1179,9 @@ export function SalaryCalculator() {
               onUpdate={(updates) => updateYearlyData(1, selectedYear, updates)}
               details={p1Details}
               year={selectedYear}
+              person1={person1}
+              person2={person2}
+              numPeople={numPeople}
             />
             {numPeople === 2 && (
               <PersonForm
@@ -1097,6 +1194,9 @@ export function SalaryCalculator() {
                 }
                 details={p2Details}
                 year={selectedYear}
+                person1={person1}
+                person2={person2}
+                numPeople={numPeople}
               />
             )}
           </div>
@@ -1841,10 +1941,8 @@ export function SalaryCalculator() {
                       12;
 
                     const yearMortgage =
-                      sumMortgageAnnual(person1.yearlyData[year]) +
-                      (numPeople === 2
-                        ? sumMortgageAnnual(person2.yearlyData[year])
-                        : 0);
+                      sumMortgageAnnual(person1, year) +
+                      (numPeople === 2 ? sumMortgageAnnual(person2, year) : 0);
 
                     const disposable =
                       totalTakeHome -
@@ -2063,7 +2161,21 @@ function PersonForm({
   onUpdate,
   details,
   year,
+  person1,
+  person2,
+  numPeople,
 }: PersonFormProps) {
+  // Calculate estimated remaining mortgage balance for this year
+  const estimatedBalance = calculateMortgageBalance(
+    person1,
+    person2,
+    numPeople,
+    year,
+  );
+  const mostRecentEntry = getMostRecentMortgageEntry(
+    personNum === 1 ? person1 : person2,
+  );
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -2355,89 +2467,121 @@ function PersonForm({
             </div>
           )}
         />
-        <div className="space-y-2 pt-2">
-          <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            Mortgage
-          </Label>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <Label className="text-[9px] text-muted-foreground">
-                Total Mortgage
-              </Label>
+        <ListSection
+          title="Mortgage Entries"
+          items={yearlyData.mortgage?.entries || []}
+          onAdd={() => {
+            const today = new Date().toISOString().split("T")[0];
+            const newEntry: MortgageEntry = {
+              id: crypto.randomUUID(),
+              date: today,
+              amount: 0,
+              interestRate: 0,
+              monthlyPayment: 0,
+              overpayment: 0,
+            };
+            onUpdate({
+              mortgage: {
+                entries: [...(yearlyData.mortgage?.entries || []), newEntry],
+              },
+            });
+          }}
+          onRemove={(id: string) =>
+            onUpdate({
+              mortgage: {
+                entries: (yearlyData.mortgage?.entries || []).filter(
+                  (e: any) => e.id !== id,
+                ),
+              },
+            })
+          }
+          onUpdateItem={(id: string, upd: any) =>
+            onUpdate({
+              mortgage: {
+                entries: (yearlyData.mortgage?.entries || []).map((e: any) =>
+                  e.id === id ? { ...e, ...upd } : e,
+                ),
+              },
+            })
+          }
+          renderItem={(item: any, updateItem: any) => (
+            <div className="flex flex-wrap gap-3 w-full items-end">
+              <Input
+                type="date"
+                className="h-8 w-32 text-xs"
+                value={item.date || ""}
+                onChange={(e) => updateItem({ date: e.target.value })}
+              />
               <Input
                 type="number"
-                placeholder="£"
-                className="h-8 text-xs"
-                value={yearlyData.mortgage?.totalMortgage || ""}
+                placeholder="Amount £"
+                className="h-8 w-28 text-xs"
+                value={item.amount || ""}
+                onChange={(e) => updateItem({ amount: Number(e.target.value) })}
+              />
+              <Input
+                type="number"
+                placeholder="Rate %"
+                className="h-8 w-20 text-xs"
+                value={item.interestRate || ""}
                 onChange={(e) =>
-                  onUpdate({
-                    mortgage: {
-                      ...(yearlyData.mortgage || {}),
-                      totalMortgage: Number(e.target.value),
-                    },
-                  })
+                  updateItem({ interestRate: Number(e.target.value) })
+                }
+              />
+              <Input
+                type="number"
+                placeholder="Payment £"
+                className="h-8 w-24 text-xs"
+                value={item.monthlyPayment || ""}
+                onChange={(e) =>
+                  updateItem({ monthlyPayment: Number(e.target.value) })
+                }
+              />
+              <Input
+                type="number"
+                placeholder="Overpay £"
+                className="h-8 w-24 text-xs"
+                value={item.overpayment || ""}
+                onChange={(e) =>
+                  updateItem({ overpayment: Number(e.target.value) })
                 }
               />
             </div>
-            <div>
-              <Label className="text-[9px] text-muted-foreground">
-                Interest Rate (%)
-              </Label>
-              <Input
-                type="number"
-                placeholder="%"
-                className="h-8 text-xs"
-                value={yearlyData.mortgage?.interestRate || ""}
-                onChange={(e) =>
-                  onUpdate({
-                    mortgage: {
-                      ...(yearlyData.mortgage || {}),
-                      interestRate: Number(e.target.value),
-                    },
-                  })
-                }
-              />
+          )}
+        />
+        {mostRecentEntry && (
+          <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-1">
+            <div className="text-xs font-semibold text-muted-foreground">
+              Estimated Mortgage Info for {year}
             </div>
-            <div>
-              <Label className="text-[9px] text-muted-foreground">
-                Monthly Payment
-              </Label>
-              <Input
-                type="number"
-                placeholder="£/month"
-                className="h-8 text-xs"
-                value={yearlyData.mortgage?.monthlyPayment || ""}
-                onChange={(e) =>
-                  onUpdate({
-                    mortgage: {
-                      ...(yearlyData.mortgage || {}),
-                      monthlyPayment: Number(e.target.value),
-                    },
-                  })
-                }
-              />
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-muted-foreground">
+                  Remaining Balance:
+                </span>
+                <span className="ml-2 font-semibold">
+                  £
+                  {estimatedBalance.toLocaleString("en-GB", {
+                    maximumFractionDigits: 0,
+                  })}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Monthly Payment:</span>
+                <span className="ml-2 font-semibold">
+                  £
+                  {(
+                    mostRecentEntry.monthlyPayment + mostRecentEntry.overpayment
+                  ).toLocaleString("en-GB", { maximumFractionDigits: 0 })}
+                </span>
+              </div>
             </div>
-            <div>
-              <Label className="text-[9px] text-muted-foreground">
-                Overpayment
-              </Label>
-              <Input
-                type="number"
-                placeholder="£/month"
-                className="h-8 text-xs"
-                value={yearlyData.mortgage?.overpayment || ""}
-                onChange={(e) =>
-                  onUpdate({
-                    mortgage: {
-                      ...(yearlyData.mortgage || {}),
-                      overpayment: Number(e.target.value),
-                    },
-                  })
-                }
-              />
+            <div className="text-[10px] text-muted-foreground italic">
+              Based on most recent entry from{" "}
+              {new Date(mostRecentEntry.date).toLocaleDateString("en-GB")}
             </div>
           </div>
-        </div>
+        )}
         <div className="space-y-2 pt-2">
           <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
             Maternity Leave
