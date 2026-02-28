@@ -300,7 +300,7 @@ export function SalaryCalculator() {
           numPeople,
           person1Data: person1,
           person2Data: numPeople === 2 ? person2 : null,
-          childcareData: childcare,
+          childcareData: { ...childcare },
         }),
       });
       console.log("Saving childcare data:", childcare);
@@ -706,10 +706,14 @@ export function SalaryCalculator() {
       totalTaxFreeSavings += tfcSaving;
 
       // Store per-child data without mutating the original child objects
+      const safeAttending = Number.isFinite(totalAttendingHours)
+        ? totalAttendingHours
+        : 0;
+      const safeFreeHours = Number.isFinite(coveredHours) ? coveredHours : 0;
       childrenData.push({
         id: child.id,
-        totalAttendingHours,
-        totalFreeHours: coveredHours,
+        totalAttendingHours: safeAttending,
+        totalFreeHours: safeFreeHours,
       });
     });
 
@@ -1428,7 +1432,7 @@ export function SalaryCalculator() {
                                 Total Hours:
                               </span>
                               <span className="font-medium">
-                                {Math.round(child.totalAttendingHours)} hrs
+                                {Math.round(childData.totalAttendingHours)} hrs
                               </span>
                             </div>
                             {actualFreeHours > 0 ? (
@@ -1691,7 +1695,8 @@ export function SalaryCalculator() {
                     return {
                       totalGross,
                       totalTakeHome,
-                      childcareCost: childcareCost.actual,
+                      childcareCostFull: childcareCost.full,
+                      childcareCostActual: childcareCost.actual,
                       totalPension,
                       disposable,
                     };
@@ -1755,7 +1760,28 @@ export function SalaryCalculator() {
                       </tr>
                       <tr className="border-b hover:bg-muted/50">
                         <td className="py-3 px-2 font-medium">
-                          Childcare Costs
+                          Childcare Costs (Full)
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-muted-foreground line-through ${idx === 1 ? "bg-primary/10" : ""}`}
+                            >
+                              £
+                              {data.childcareCostFull.toLocaleString(
+                                undefined,
+                                {
+                                  maximumFractionDigits: 0,
+                                },
+                              )}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Childcare Costs (Actual)
                         </td>
                         {yearData.map((data, idx) =>
                           data ? (
@@ -1764,9 +1790,12 @@ export function SalaryCalculator() {
                               className={`text-right py-3 px-2 text-destructive ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
                             >
                               £
-                              {data.childcareCost.toLocaleString(undefined, {
-                                maximumFractionDigits: 0,
-                              })}
+                              {data.childcareCostActual.toLocaleString(
+                                undefined,
+                                {
+                                  maximumFractionDigits: 0,
+                                },
+                              )}
                             </td>
                           ) : null,
                         )}

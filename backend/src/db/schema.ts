@@ -5,7 +5,6 @@ import {
   uuid,
   integer,
   jsonb,
-  decimal,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
@@ -21,7 +20,7 @@ export const calculations = pgTable("calculations", {
     .references(() => users.id)
     .notNull(),
   numPeople: integer("num_people").notNull().default(1),
-  person1Data: jsonb("person1_data").notNull(),
+  person1Data: jsonb("person1_data"),
   person2Data: jsonb("person2_data"),
   childcareData: jsonb("childcare_data"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -26,6 +26,10 @@ app.post("/auth/register", async (c) => {
       })
       .returning();
 
+    if (!user) {
+      return c.json({ error: "Failed to create user" }, 500);
+    }
+
     const token = await sign({ userId: user.id }, JWT_SECRET);
     return c.json({ token, user: { id: user.id, email: user.email } });
   } catch (e) {
@@ -66,6 +70,14 @@ app.post("/api/calculation", async (c) => {
   const payload = c.get("jwtPayload");
   const body = await c.req.json();
 
+  console.log("=== BACKEND RECEIVED ===");
+  console.log("body.childcareData:", body.childcareData);
+  console.log("typeof body.childcareData:", typeof body.childcareData);
+  console.log(
+    "JSON.stringify(body.childcareData):",
+    JSON.stringify(body.childcareData),
+  );
+
   const existing = await db
     .select()
     .from(calculations)
@@ -73,6 +85,10 @@ app.post("/api/calculation", async (c) => {
     .limit(1);
 
   if (existing.length > 0) {
+    console.log(
+      "Updating existing record with childcareData:",
+      JSON.stringify(body.childcareData),
+    );
     const [updated] = await db
       .update(calculations)
       .set({
@@ -84,8 +100,21 @@ app.post("/api/calculation", async (c) => {
       })
       .where(eq(calculations.userId, payload.userId))
       .returning();
+
+    if (!updated) {
+      return c.json({ error: "Failed to update record" }, 500);
+    }
+
+    console.log(
+      "Update result childcareData:",
+      JSON.stringify(updated.childcareData),
+    );
     return c.json(updated);
   } else {
+    console.log(
+      "Inserting new record with childcareData:",
+      JSON.stringify(body.childcareData),
+    );
     const [inserted] = await db
       .insert(calculations)
       .values({
@@ -96,6 +125,15 @@ app.post("/api/calculation", async (c) => {
         childcareData: body.childcareData,
       })
       .returning();
+
+    if (!inserted) {
+      return c.json({ error: "Failed to insert record" }, 500);
+    }
+
+    console.log(
+      "Insert result childcareData:",
+      JSON.stringify(inserted.childcareData),
+    );
     return c.json(inserted);
   }
 });
