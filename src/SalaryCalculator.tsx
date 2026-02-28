@@ -609,6 +609,11 @@ export function SalaryCalculator() {
     let totalFullYear = 0;
     let totalWithBenefits = 0;
     let totalTaxFreeSavings = 0;
+    const childrenData: Array<{
+      id: string;
+      totalAttendingHours: number;
+      totalFreeHours: number;
+    }> = [];
 
     const taxYear = getTaxYearDates(yearStr);
 
@@ -700,9 +705,12 @@ export function SalaryCalculator() {
       totalWithBenefits += finalCostForChild;
       totalTaxFreeSavings += tfcSaving;
 
-      // Store individual child hours for the return object if needed, but for now we aggregate
-      child.totalAttendingHours = totalAttendingHours;
-      child.totalFreeHours = coveredHours;
+      // Store per-child data without mutating the original child objects
+      childrenData.push({
+        id: child.id,
+        totalAttendingHours,
+        totalFreeHours: coveredHours,
+      });
     });
 
     return {
@@ -710,14 +718,15 @@ export function SalaryCalculator() {
       actual: totalWithBenefits,
       savings: totalFullYear - totalWithBenefits,
       taxFreeSavings: totalTaxFreeSavings,
-      totalAttendingHours: childcare.children.reduce(
-        (sum, c: any) => sum + (c.totalAttendingHours || 0),
+      totalAttendingHours: childrenData.reduce(
+        (sum, c) => sum + c.totalAttendingHours,
         0,
       ),
-      totalFreeHours: childcare.children.reduce(
-        (sum, c: any) => sum + (c.totalFreeHours || 0),
+      totalFreeHours: childrenData.reduce(
+        (sum, c) => sum + c.totalFreeHours,
         0,
       ),
+      childrenData,
     };
   };
 
@@ -1289,18 +1298,172 @@ export function SalaryCalculator() {
                       />
                     </div>
                   </div>
-                  {child.totalAttendingHours > 0 && (
-                    <div className="pt-2 border-t border-border/50 flex justify-between text-[10px] text-muted-foreground italic">
-                      <span>
-                        Total: {Math.round(child.totalAttendingHours)} hrs
-                      </span>
-                      {isEligibleForFreeChildcare && (
-                        <span>
-                          Free: {Math.round(child.totalFreeHours)} hrs
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    // Get the actual calculated data for this child from the current year's calculation
+                    const childData = childcareCosts.childrenData?.find(
+                      (c) => c.id === child.id,
+                    );
+                    if (!childData || childData.totalAttendingHours === 0)
+                      return null;
+
+                    const taxYear = getTaxYearDates(selectedYear);
+                    const birthDate = new Date(child.birthDate);
+                    const ageMonthsAtEnd =
+                      (taxYear.end.getTime() - birthDate.getTime()) /
+                      (1000 * 60 * 60 * 24 * 30.44);
+                    const ageYearsAtEnd = ageMonthsAtEnd / 12;
+
+                    const attendanceStart = child.benefitStartDate
+                      ? new Date(child.benefitStartDate)
+                      : taxYear.start;
+                    const attendanceEnd = child.benefitEndDate
+                      ? new Date(child.benefitEndDate)
+                      : taxYear.end;
+                    const overlapStart = new Date(
+                      Math.max(
+                        taxYear.start.getTime(),
+                        attendanceStart.getTime(),
+                      ),
+                    );
+                    const overlapEnd = new Date(
+                      Math.min(taxYear.end.getTime(), attendanceEnd.getTime()),
+                    );
+                    const overlapDays = Math.max(
+                      0,
+                      Math.ceil(
+                        (overlapEnd.getTime() - overlapStart.getTime()) /
+                          (1000 * 60 * 60 * 24),
+                      ) + 1,
+                    );
+                    const overlapWeeks = overlapDays / 7;
+
+                    const actualFreeHours = childData.totalFreeHours || 0;
+                    const paidHours =
+                      childData.totalAttendingHours - actualFreeHours;
+
+                    // Determine scheme based on ACTUAL free hours applied
+                    let scheme = "None";
+                    let reason = "";
+
+                    if (actualFreeHours > 0) {
+                      const expectedWorking = 1140 * (overlapWeeks / 52);
+                      const expectedUniversal = 570 * (overlapWeeks / 52);
+
+                      if (
+                        Math.abs(actualFreeHours - expectedWorking) <
+                        Math.abs(actualFreeHours - expectedUniversal)
+                      ) {
+                        scheme = "Working Parents (30hrs)";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Receiving 30hrs/week`;
+                      } else {
+                        scheme = "Universal (15hrs)";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Receiving 15hrs/week`;
+                      }
+                    } else {
+                      if (ageYearsAtEnd < 0.75) {
+                        scheme = "None";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Too young (need 9+ months)`;
+                      } else if (ageYearsAtEnd >= 4) {
+                        scheme = "None";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Too old (max 4 years)`;
+                      } else if (ageMonthsAtEnd >= 9 && ageYearsAtEnd < 3) {
+                        scheme = "None";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Not eligible (income too high in previous year)`;
+                      } else if (ageYearsAtEnd >= 3 && ageYearsAtEnd < 4) {
+                        scheme = "None";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Should get Universal 15hrs (check eligibility)`;
+                      } else {
+                        scheme = "None";
+                        reason = `Age: ${ageYearsAtEnd.toFixed(1)}y - Not eligible`;
+                      }
+                    }
+
+                    return (
+                      <div className="pt-2 border-t border-border/50 space-y-2 text-[10px]">
+                        <div className="bg-muted/50 p-2 rounded space-y-1">
+                          <div className="font-semibold text-primary">
+                            Eligibility Details:
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              Scheme:
+                            </span>
+                            <span
+                              className={`font-medium ${scheme !== "None" ? "text-green-700" : "text-amber-700"}`}
+                            >
+                              {scheme}
+                            </span>
+                          </div>
+                          <div className="text-muted-foreground text-[9px] italic">
+                            {reason}
+                          </div>
+
+                          <div className="pt-1 border-t border-border/30 space-y-1">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">
+                                Attendance Period:
+                              </span>
+                              <span className="font-medium">
+                                {overlapWeeks.toFixed(1)} weeks
+                              </span>
+                            </div>
+                            <div className="text-muted-foreground text-[9px] italic">
+                              {attendanceStart.toLocaleDateString("en-GB", {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                              })}{" "}
+                              to{" "}
+                              {attendanceEnd.toLocaleDateString("en-GB", {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="pt-1 border-t border-border/30 space-y-1">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">
+                                Total Hours:
+                              </span>
+                              <span className="font-medium">
+                                {Math.round(child.totalAttendingHours)} hrs
+                              </span>
+                            </div>
+                            {actualFreeHours > 0 ? (
+                              <>
+                                <div className="flex justify-between text-green-700">
+                                  <span>Free Hours Applied:</span>
+                                  <span className="font-medium">
+                                    {Math.round(actualFreeHours)} hrs
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">
+                                    Paid Hours:
+                                  </span>
+                                  <span className="font-medium">
+                                    {Math.round(paidHours)} hrs
+                                  </span>
+                                </div>
+                                <div className="text-[9px] text-muted-foreground italic">
+                                  {scheme === "Working Parents (30hrs)" &&
+                                    `30 hrs/week × 38 weeks × ${(overlapWeeks / 52).toFixed(2)} year`}
+                                  {scheme === "Universal (15hrs)" &&
+                                    `15 hrs/week × 38 weeks × ${(overlapWeeks / 52).toFixed(2)} year`}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-[9px] text-amber-700 italic mt-1">
+                                No free hours - paying full cost
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
               <div className="pt-4 border-t space-y-3">
