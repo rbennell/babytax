@@ -25,6 +25,9 @@ services:
       JWT_SECRET: super-secret-key-change-me
     depends_on:
       - db
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
 
 volumes:
   postgres_data:

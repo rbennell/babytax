@@ -71,6 +71,12 @@ interface MortgageData {
   interestRate: number;
 }
 
+interface MaternityLeave {
+  weeksFullPay: number;
+  weeksStatutoryPay: number;
+  weeksUnpaid: number;
+}
+
 interface YearlyIncomeData {
   baseSalary: number;
   bonuses: Bonus[];
@@ -81,6 +87,7 @@ interface YearlyIncomeData {
   sacrifices: SalarySacrifice[];
   monthlyExpenses: MonthlyExpense[];
   mortgage: MortgageData;
+  maternityLeave?: MaternityLeave;
 }
 
 interface IncomeState {
@@ -489,7 +496,39 @@ export function SalaryCalculator() {
         : originalData;
 
     const config = TAX_YEAR_CONFIG[year] || TAX_YEAR_CONFIG[DEFAULT_YEAR];
-    const totalGross = calculateTotalGross(data);
+
+    // Handle maternity leave adjustments
+    let adjustedBaseSalary = data.baseSalary;
+    let maternityPay = 0;
+
+    if (data.maternityLeave) {
+      const { weeksFullPay, weeksStatutoryPay, weeksUnpaid } =
+        data.maternityLeave;
+      const totalMaternityWeeks =
+        weeksFullPay + weeksStatutoryPay + weeksUnpaid;
+      const weeklyBaseSalary = data.baseSalary / 52;
+
+      // Statutory Maternity Pay rate (2024/25: £184.03/week or 90% of weekly earnings, whichever is lower)
+      const statutoryRate = 184.03;
+      const ninetyPercentWeekly = weeklyBaseSalary * 0.9;
+      const weeklyStatutoryPay = Math.min(statutoryRate, ninetyPercentWeekly);
+
+      // Calculate total pay during maternity leave
+      const fullPayAmount = weeksFullPay * weeklyBaseSalary;
+      const statutoryPayAmount = weeksStatutoryPay * weeklyStatutoryPay;
+      const unpaidAmount = 0; // weeksUnpaid contributes nothing
+
+      // Calculate working weeks (52 - maternity weeks)
+      const workingWeeks = 52 - totalMaternityWeeks;
+      const workingPay = workingWeeks * weeklyBaseSalary;
+
+      // Adjusted base salary is working pay + maternity pay
+      adjustedBaseSalary = workingPay + fullPayAmount + statutoryPayAmount;
+      maternityPay = fullPayAmount + statutoryPayAmount;
+    }
+
+    const adjustedData = { ...data, baseSalary: adjustedBaseSalary };
+    const totalGross = calculateTotalGross(adjustedData);
     const pensionInfo = calculateYearlyPensionContribution(data);
     const savingsInterest = calculateSavingsInterest(data);
     const salarySacrifices = data.sacrifices
@@ -617,6 +656,7 @@ export function SalaryCalculator() {
       interest: savingsInterest,
       grossSalary: totalGross,
       baselineTakeHome,
+      maternityPay,
     };
   };
 
@@ -730,8 +770,11 @@ export function SalaryCalculator() {
       const coveredHours = Math.min(totalAttendingHours, freeHoursInOverlap);
       const remainingHoursInOverlap = totalAttendingHours - coveredHours;
 
+      // Top-up cost is per hour for the "free" hours (e.g., consumables, meals)
+      // Remaining hours are charged at full hourly rate
+      const topUpHourlyRate = child.topUpCost / hoursPerDay; // Convert daily top-up to hourly
       const costWith30Hours =
-        coveredHours * child.topUpCost + remainingHoursInOverlap * hourlyRate;
+        coveredHours * topUpHourlyRate + remainingHoursInOverlap * hourlyRate;
 
       // Tax-Free Childcare (TFC)
       let finalCostForChild = costWith30Hours;
@@ -2388,6 +2431,77 @@ function PersonForm({
                     mortgage: {
                       ...(yearlyData.mortgage || {}),
                       overpayment: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+          </div>
+        </div>
+        <div className="space-y-2 pt-2">
+          <Label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            Maternity Leave
+          </Label>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Weeks Full Pay
+              </Label>
+              <Input
+                type="number"
+                placeholder="weeks"
+                className="h-8 text-xs"
+                value={yearlyData.maternityLeave?.weeksFullPay || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    maternityLeave: {
+                      weeksFullPay: Number(e.target.value),
+                      weeksStatutoryPay:
+                        yearlyData.maternityLeave?.weeksStatutoryPay || 0,
+                      weeksUnpaid: yearlyData.maternityLeave?.weeksUnpaid || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Weeks Statutory Pay
+              </Label>
+              <Input
+                type="number"
+                placeholder="weeks"
+                className="h-8 text-xs"
+                value={yearlyData.maternityLeave?.weeksStatutoryPay || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    maternityLeave: {
+                      weeksFullPay:
+                        yearlyData.maternityLeave?.weeksFullPay || 0,
+                      weeksStatutoryPay: Number(e.target.value),
+                      weeksUnpaid: yearlyData.maternityLeave?.weeksUnpaid || 0,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div>
+              <Label className="text-[9px] text-muted-foreground">
+                Weeks Unpaid
+              </Label>
+              <Input
+                type="number"
+                placeholder="weeks"
+                className="h-8 text-xs"
+                value={yearlyData.maternityLeave?.weeksUnpaid || ""}
+                onChange={(e) =>
+                  onUpdate({
+                    maternityLeave: {
+                      weeksFullPay:
+                        yearlyData.maternityLeave?.weeksFullPay || 0,
+                      weeksStatutoryPay:
+                        yearlyData.maternityLeave?.weeksStatutoryPay || 0,
+                      weeksUnpaid: Number(e.target.value),
                     },
                   })
                 }
