@@ -371,6 +371,7 @@ interface PersonFormProps {
   person1: IncomeState;
   person2: IncomeState;
   numPeople: number;
+  onCopyExpenses: () => void;
 }
 
 export function SalaryCalculator() {
@@ -509,6 +510,22 @@ export function SalaryCalculator() {
 
   const getYearlyData = (person: IncomeState, year: string) => {
     return person.yearlyData[year] || initialYearlyData();
+  };
+
+  const copyPreviousYearExpenses = (personNum: 1 | 2, year: string) => {
+    const idx = TAX_YEARS.indexOf(year);
+    if (idx <= 0) return;
+    const prevYear = TAX_YEARS[idx - 1];
+    if (!prevYear) return;
+    const sourcePerson = personNum === 1 ? person1 : person2;
+    const prevData = getYearlyData(sourcePerson, prevYear);
+    const prevExpenses = prevData.monthlyExpenses || [];
+    if (prevExpenses.length === 0) return;
+    const clonedExpenses = prevExpenses.map((expense) => ({
+      ...expense,
+      id: crypto.randomUUID(),
+    }));
+    updateYearlyData(personNum, year, { monthlyExpenses: clonedExpenses });
   };
 
   const updateYearlyData = (
@@ -1182,6 +1199,7 @@ export function SalaryCalculator() {
               person1={person1}
               person2={person2}
               numPeople={numPeople}
+              onCopyExpenses={() => copyPreviousYearExpenses(1, selectedYear)}
             />
             {numPeople === 2 && (
               <PersonForm
@@ -1197,6 +1215,7 @@ export function SalaryCalculator() {
                 person1={person1}
                 person2={person2}
                 numPeople={numPeople}
+                onCopyExpenses={() => copyPreviousYearExpenses(2, selectedYear)}
               />
             )}
           </div>
@@ -2164,6 +2183,7 @@ function PersonForm({
   person1,
   person2,
   numPeople,
+  onCopyExpenses,
 }: PersonFormProps) {
   // Calculate estimated remaining mortgage balance for this year
   const estimatedBalance = calculateMortgageBalance(
@@ -2407,6 +2427,12 @@ function PersonForm({
             </div>
           )}
         />
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold">Monthly Expenses</span>
+          <Button size="sm" variant="outline" onClick={onCopyExpenses}>
+            Copy from previous year
+          </Button>
+        </div>
         <ListSection
           title="Monthly Expenses"
           items={yearlyData.monthlyExpenses || []}
@@ -2471,7 +2497,7 @@ function PersonForm({
           title="Mortgage Entries"
           items={yearlyData.mortgage?.entries || []}
           onAdd={() => {
-            const today = new Date().toISOString().split("T")[0];
+            const today = new Date().toISOString().split("T")[0] as string;
             const newEntry: MortgageEntry = {
               id: crypto.randomUUID(),
               date: today,
