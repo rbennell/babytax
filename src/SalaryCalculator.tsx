@@ -226,9 +226,15 @@ export function SalaryCalculator() {
         headers: { Authorization: `Bearer ${auth.token}` },
       });
       const data = await res.json();
+      console.log("Loaded data from DB:", data);
       if (data.id) {
         setNumPeople(data.numPeople);
-        if (data.childcareData) setChildcare(data.childcareData);
+        if (data.childcareData) {
+          console.log("Loading childcare data:", data.childcareData);
+          setChildcare(data.childcareData);
+        } else {
+          console.log("No childcare data in response");
+        }
         const mergeData = (prev: IncomeState, newData: any) => ({
           ...prev,
           name: newData.name || prev.name,
@@ -264,7 +270,14 @@ export function SalaryCalculator() {
           childcareData: childcare,
         }),
       });
-      if (!res.ok) throw new Error("Failed to save");
+      console.log("Saving childcare data:", childcare);
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Save failed with status:", res.status, errorText);
+        throw new Error("Failed to save");
+      }
+      const savedData = await res.json();
+      console.log("Saved data response:", savedData);
       setLastSaved(new Date());
     } catch (err) {
       console.error("Save failed", err);
@@ -534,9 +547,18 @@ export function SalaryCalculator() {
   const p2Details = calculateUKNetIncome(person2, selectedYear);
   const THRESHOLD = 100000;
 
-  const isEligibleForFreeChildcare =
-    p1Details.adjustedNetIncome <= THRESHOLD &&
-    (numPeople === 1 || p2Details.adjustedNetIncome <= THRESHOLD);
+  // Eligibility for free childcare is based on PREVIOUS tax year's income
+  const prevYearIdx = TAX_YEARS.indexOf(selectedYear) - 1;
+  const previousYear = prevYearIdx >= 0 ? TAX_YEARS[prevYearIdx] : null;
+
+  let isEligibleForFreeChildcare = false;
+  if (previousYear) {
+    const p1PrevDetails = calculateUKNetIncome(person1, previousYear);
+    const p2PrevDetails = calculateUKNetIncome(person2, previousYear);
+    isEligibleForFreeChildcare =
+      p1PrevDetails.adjustedNetIncome <= THRESHOLD &&
+      (numPeople === 1 || p2PrevDetails.adjustedNetIncome <= THRESHOLD);
+  }
 
   const getTaxYearDates = (year: string) => {
     const parts = year.split("/");
@@ -708,11 +730,11 @@ export function SalaryCalculator() {
     const p2Analysis =
       numPeople === 2 ? analyzePerson(person2, p2Details) : null;
 
-    const costsWithEligibility = calculateChildcareForEligibility(
-      true,
-      selectedYear,
-    );
-    const potentialChildcareSaving = costsWithEligibility.savings;
+    // If not currently eligible, childcare savings only apply in NEXT year after sacrifice
+    // If already eligible, savings apply in current year
+    const potentialChildcareSaving = isEligibleForFreeChildcare
+      ? calculateChildcareForEligibility(true, selectedYear).savings
+      : 0;
 
     // Look ahead to next year if sacrifice is applied
     const nextYearIdx = TAX_YEARS.indexOf(selectedYear) + 1;
@@ -1007,20 +1029,36 @@ export function SalaryCalculator() {
                     <Baby className="h-4 w-4" /> Potential Comprehensive Benefit
                   </h4>
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium text-amber-800">
-                          In Current Year ({selectedYear}):
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Gain from 30 free hours + Tax-Free Childcare
-                        </p>
+                    {isEligibleForFreeChildcare ? (
+                      <div className="flex justify-between items-center">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-amber-800">
+                            In Current Year ({selectedYear}):
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Already eligible - savings apply now
+                          </p>
+                        </div>
+                        <span className="text-xl font-bold text-green-600">
+                          £
+                          {savingsAnalysis.potentialChildcareSaving.toLocaleString()}
+                        </span>
                       </div>
-                      <span className="text-xl font-bold text-green-600">
-                        £
-                        {savingsAnalysis.potentialChildcareSaving.toLocaleString()}
-                      </span>
-                    </div>
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-amber-800">
+                            In Current Year ({selectedYear}):
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            No childcare savings (eligibility starts next year)
+                          </p>
+                        </div>
+                        <span className="text-xl font-bold text-muted-foreground">
+                          £0
+                        </span>
+                      </div>
+                    )}
 
                     {savingsAnalysis.nextYearLabel && (
                       <div className="flex justify-between items-center pt-2 border-t border-green-100">
@@ -1029,7 +1067,9 @@ export function SalaryCalculator() {
                             In Next Year ({savingsAnalysis.nextYearLabel}):
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Estimated benefit if eligibility maintained
+                            {isEligibleForFreeChildcare
+                              ? "Estimated benefit if eligibility maintained"
+                              : "First year of childcare savings after sacrifice"}
                           </p>
                         </div>
                         <span className="text-xl font-bold text-blue-600">
@@ -1042,7 +1082,9 @@ export function SalaryCalculator() {
                   <div className="pt-4 border-t border-green-200">
                     <div className="flex justify-between items-center">
                       <span className="font-bold text-lg text-primary">
-                        Total Potential Gain:
+                        {isEligibleForFreeChildcare
+                          ? "Total Potential Gain (Current Year):"
+                          : "Net Impact (Current Year):"}
                       </span>
                       <span className="text-2xl font-black text-primary">
                         £
@@ -1056,8 +1098,9 @@ export function SalaryCalculator() {
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground mt-2 italic">
-                      Tax savings + Childcare benefits ({selectedYear}) -
-                      Take-home reduction.
+                      {isEligibleForFreeChildcare
+                        ? `Tax savings + Childcare benefits (${selectedYear}) - Take-home reduction.`
+                        : `Tax savings (${selectedYear}) - Take-home reduction. Childcare savings begin next year.`}
                     </p>
                   </div>
                 </div>
