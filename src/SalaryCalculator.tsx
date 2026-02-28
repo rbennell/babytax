@@ -98,6 +98,9 @@ const TAX_YEARS = [
   "2025/26",
   "2026/27",
   "2027/28",
+  "2028/29",
+  "2029/30",
+  "2030/31",
 ];
 const DEFAULT_YEAR = "2025/26";
 
@@ -153,6 +156,36 @@ const TAX_YEAR_CONFIG: Record<string, any> = {
     pensionAllowance: 60000,
   },
   "2027/28": {
+    personalAllowance: 12570,
+    basicRateLimit: 37700,
+    higherRateLimit: 125140,
+    niPt: 12570,
+    niUel: 50270,
+    niRate1: 0.08,
+    niRate2: 0.02,
+    pensionAllowance: 60000,
+  },
+  "2028/29": {
+    personalAllowance: 12570,
+    basicRateLimit: 37700,
+    higherRateLimit: 125140,
+    niPt: 12570,
+    niUel: 50270,
+    niRate1: 0.08,
+    niRate2: 0.02,
+    pensionAllowance: 60000,
+  },
+  "2029/30": {
+    personalAllowance: 12570,
+    basicRateLimit: 37700,
+    higherRateLimit: 125140,
+    niPt: 12570,
+    niUel: 50270,
+    niRate1: 0.08,
+    niRate2: 0.02,
+    pensionAllowance: 60000,
+  },
+  "2030/31": {
     personalAllowance: 12570,
     basicRateLimit: 37700,
     higherRateLimit: 125140,
@@ -1270,41 +1303,102 @@ export function SalaryCalculator() {
                   )}
                 </div>
               ))}
-              <div className="pt-4 border-t space-y-2">
-                <div className="flex justify-between text-[10px] text-muted-foreground italic mb-1">
-                  <span>
-                    Household Total:{" "}
-                    {Math.round(childcareCosts.totalAttendingHours || 0)} hrs
-                  </span>
-                  {isEligibleForFreeChildcare && (
-                    <span>
-                      Household Free:{" "}
-                      {Math.round(childcareCosts.totalFreeHours || 0)} hrs
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">
-                    Full Yearly Cost:
-                  </span>
-                  <span className="line-through text-muted-foreground/60">
-                    £{childcareCosts.full.toLocaleString()}
-                  </span>
-                </div>
-                {isEligibleForFreeChildcare &&
-                  childcareCosts.taxFreeSavings > 0 && (
-                    <div className="flex justify-between text-xs text-blue-600 font-medium">
-                      <span>Tax-Free Childcare Saving:</span>
-                      <span>
-                        -£{childcareCosts.taxFreeSavings.toLocaleString()}
+              <div className="pt-4 border-t space-y-3">
+                <div className="bg-muted/30 p-3 rounded-md space-y-2">
+                  <h4 className="text-xs font-semibold text-primary mb-2">
+                    Calculation Breakdown:
+                  </h4>
+
+                  <div className="space-y-1 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Total Hours Attending:
+                      </span>
+                      <span className="font-medium">
+                        {Math.round(childcareCosts.totalAttendingHours || 0)}{" "}
+                        hrs
                       </span>
                     </div>
+
+                    {isEligibleForFreeChildcare &&
+                      childcareCosts.totalFreeHours > 0 && (
+                        <>
+                          <div className="flex justify-between text-green-700">
+                            <span>Free Hours (30hrs scheme):</span>
+                            <span className="font-medium">
+                              -{Math.round(childcareCosts.totalFreeHours || 0)}{" "}
+                              hrs
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-t border-border/50 pt-1">
+                            <span className="text-muted-foreground">
+                              Paid Hours:
+                            </span>
+                            <span className="font-medium">
+                              {Math.round(
+                                (childcareCosts.totalAttendingHours || 0) -
+                                  (childcareCosts.totalFreeHours || 0),
+                              )}{" "}
+                              hrs
+                            </span>
+                          </div>
+                        </>
+                      )}
+                  </div>
+
+                  <div className="pt-2 border-t border-border/50 space-y-1 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Full Cost (no benefits):
+                      </span>
+                      <span className="font-medium">
+                        £{childcareCosts.full.toLocaleString()}
+                      </span>
+                    </div>
+
+                    {isEligibleForFreeChildcare && (
+                      <>
+                        <div className="flex justify-between text-green-700">
+                          <span>Saving from Free Hours:</span>
+                          <span className="font-medium">
+                            -£
+                            {(
+                              childcareCosts.full -
+                              childcareCosts.actual -
+                              (childcareCosts.taxFreeSavings || 0)
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+
+                        {childcareCosts.taxFreeSavings > 0 && (
+                          <div className="flex justify-between text-blue-600">
+                            <span>Tax-Free Childcare (20%):</span>
+                            <span className="font-medium">
+                              -£{childcareCosts.taxFreeSavings.toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    <div className="flex justify-between border-t border-border/50 pt-1 font-bold text-sm">
+                      <span>Final Cost:</span>
+                      <span className="text-destructive">
+                        £{childcareCosts.actual.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {isEligibleForFreeChildcare && (
+                    <div className="pt-2 border-t border-border/50 text-[10px] text-muted-foreground italic">
+                      <div className="flex justify-between">
+                        <span>Total Savings:</span>
+                        <span className="text-green-700 font-semibold">
+                          £{childcareCosts.savings.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
                   )}
-                <div className="flex justify-between text-sm font-bold">
-                  <span>Estimated Actual Cost:</span>
-                  <span className="text-destructive">
-                    £{childcareCosts.actual.toLocaleString()}
-                  </span>
                 </div>
               </div>
             </CardContent>
@@ -1352,6 +1446,194 @@ export function SalaryCalculator() {
           </Card>
         </div>
       </div>
+
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle>3-Year Financial Overview</CardTitle>
+          <CardDescription>
+            Compare previous, current, and next year projections
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-3 px-2 font-semibold">Metric</th>
+                  {(() => {
+                    const currentIdx = TAX_YEARS.indexOf(selectedYear);
+                    const years = [
+                      currentIdx > 0 ? TAX_YEARS[currentIdx - 1] : null,
+                      selectedYear,
+                      currentIdx < TAX_YEARS.length - 1
+                        ? TAX_YEARS[currentIdx + 1]
+                        : null,
+                    ];
+                    return years.map((year, idx) =>
+                      year ? (
+                        <th
+                          key={year}
+                          className={`text-right py-3 px-2 font-semibold ${idx === 1 ? "bg-primary/10" : ""}`}
+                        >
+                          {year}
+                        </th>
+                      ) : null,
+                    );
+                  })()}
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const currentIdx = TAX_YEARS.indexOf(selectedYear);
+                  const years = [
+                    currentIdx > 0 ? TAX_YEARS[currentIdx - 1] : null,
+                    selectedYear,
+                    currentIdx < TAX_YEARS.length - 1
+                      ? TAX_YEARS[currentIdx + 1]
+                      : null,
+                  ];
+
+                  const yearData = years.map((year) => {
+                    if (!year) return null;
+                    const p1 = calculateUKNetIncome(person1, year);
+                    const p2 = calculateUKNetIncome(person2, year);
+                    const totalGross =
+                      p1.grossSalary + (numPeople === 2 ? p2.grossSalary : 0);
+                    const totalTakeHome =
+                      p1.netIncome + (numPeople === 2 ? p2.netIncome : 0);
+                    const totalPension =
+                      p1.currentYearContribution +
+                      (numPeople === 2 ? p2.currentYearContribution : 0);
+
+                    // Check eligibility based on previous year
+                    const prevYearIdx = TAX_YEARS.indexOf(year) - 1;
+                    const prevYear =
+                      prevYearIdx >= 0 ? TAX_YEARS[prevYearIdx] : null;
+                    let isEligible = false;
+                    if (prevYear) {
+                      const p1Prev = calculateUKNetIncome(person1, prevYear);
+                      const p2Prev = calculateUKNetIncome(person2, prevYear);
+                      isEligible =
+                        p1Prev.adjustedNetIncome <= THRESHOLD &&
+                        (numPeople === 1 ||
+                          p2Prev.adjustedNetIncome <= THRESHOLD);
+                    }
+
+                    const childcareCost = calculateChildcareForEligibility(
+                      isEligible,
+                      year,
+                    );
+                    const disposable = totalTakeHome - childcareCost.actual;
+
+                    return {
+                      totalGross,
+                      totalTakeHome,
+                      childcareCost: childcareCost.actual,
+                      totalPension,
+                      disposable,
+                    };
+                  });
+
+                  return (
+                    <>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Total Gross Income
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.totalGross.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Total Pension Contributions
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-blue-600 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.totalPension.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Combined Take-home
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-green-600 ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.totalTakeHome.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-2 font-medium">
+                          Childcare Costs
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 text-destructive ${idx === 1 ? "bg-primary/10 font-semibold" : ""}`}
+                            >
+                              £
+                              {data.childcareCost.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                      <tr className="border-b-2 border-primary/20 hover:bg-muted/50">
+                        <td className="py-3 px-2 font-bold">
+                          Disposable Income
+                        </td>
+                        {yearData.map((data, idx) =>
+                          data ? (
+                            <td
+                              key={idx}
+                              className={`text-right py-3 px-2 font-bold text-primary text-lg ${idx === 1 ? "bg-primary/10" : ""}`}
+                            >
+                              £
+                              {data.disposable.toLocaleString(undefined, {
+                                maximumFractionDigits: 0,
+                              })}
+                            </td>
+                          ) : null,
+                        )}
+                      </tr>
+                    </>
+                  );
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="mt-8">
         <CardHeader>
