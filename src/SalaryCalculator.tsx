@@ -75,13 +75,11 @@ interface OneOffExpense {
 
 interface PensionEntry {
   id: string;
+  name: string;
   date: string;
   amount: number;
   interestRate: number;
-}
-
-interface PensionData {
-  entries: PensionEntry[];
+  isActive: boolean;
 }
 
 interface MortgageEntry {
@@ -109,17 +107,17 @@ interface YearlyIncomeData {
   carAllowance: number;
   employeePensionPercent: number;
   employerPensionPercent: number;
-  savings: SavingsAccount[];
   sacrifices: SalarySacrifice[];
   monthlyExpenses: MonthlyExpense[];
   oneOffExpenses: OneOffExpense[];
   mortgage: MortgageData;
-  pension: PensionData;
   maternityLeave?: MaternityLeave;
 }
 
 interface IncomeState {
   name: string;
+  savings: SavingsAccount[];
+  pensions: PensionEntry[];
   yearlyData: Record<string, YearlyIncomeData>;
 }
 
@@ -254,14 +252,10 @@ const initialYearlyData = (): YearlyIncomeData => ({
   carAllowance: 0,
   employeePensionPercent: 0,
   employerPensionPercent: 0,
-  savings: [],
   sacrifices: [],
   monthlyExpenses: [],
   oneOffExpenses: [],
   mortgage: {
-    entries: [],
-  },
-  pension: {
     entries: [],
   },
 });
@@ -273,9 +267,6 @@ const ensureYearlyData = (data?: YearlyIncomeData): YearlyIncomeData => ({
   oneOffExpenses: data?.oneOffExpenses ?? [],
   mortgage: {
     entries: data?.mortgage?.entries ?? [],
-  },
-  pension: {
-    entries: data?.pension?.entries ?? [],
   },
 });
 
@@ -379,66 +370,35 @@ const sumMortgageAnnual = (person: IncomeState, year: string = "2025/26") => {
   return (mostRecentEntry.monthlyPayment + mostRecentEntry.overpayment) * 12;
 };
 
-// Get the most recent pension entry from a person's data (across all years)
-const getMostRecentPensionEntry = (
-  person: IncomeState,
-): PensionEntry | null => {
-  const allEntries: PensionEntry[] = [];
-
-  Object.values(person.yearlyData).forEach((data) => {
-    if (data.pension?.entries) {
-      allEntries.push(...data.pension.entries);
-    }
-  });
-
-  if (allEntries.length === 0) return null;
-
-  allEntries.sort((a, b) => b.date.localeCompare(a.date));
-  return allEntries[0] ?? null;
+// Get the active pension entry from a person
+const getActivePensionEntry = (person: IncomeState): PensionEntry | null => {
+  return person.pensions.find((p) => p.isActive) ?? null;
 };
 
-// Calculate projected pension value at start of a given year
-const calculatePensionValue = (
-  person1: IncomeState,
-  person2: IncomeState,
-  numPeople: number,
+// Calculate projected value for a single pension account
+const calculateSinglePensionValue = (
+  pension: PensionEntry,
+  person: IncomeState,
   targetYear: string,
+  includeWorkContributions: boolean = false,
 ): number => {
-  const allEntries: Array<PensionEntry & { person: 1 | 2 }> = [];
+  if (!pension.date) return pension.amount;
 
-  Object.entries(person1.yearlyData).forEach(([year, data]) => {
-    data.pension?.entries?.forEach((entry) => {
-      allEntries.push({ ...entry, person: 1 });
-    });
-  });
-
-  if (numPeople === 2) {
-    Object.entries(person2.yearlyData).forEach(([year, data]) => {
-      data.pension?.entries?.forEach((entry) => {
-        allEntries.push({ ...entry, person: 2 });
-      });
-    });
-  }
-
-  allEntries.sort((a, b) => a.date.localeCompare(b.date));
-
-  const startEntry = [...allEntries].reverse().find((e) => e.amount > 0);
-  if (!startEntry) return 0;
-
-  let value = startEntry.amount;
-  const startDate = new Date(startEntry.date);
+  const startDate = new Date(pension.date);
   const targetDate = new Date(`${targetYear.split("/")[0]}-04-06`);
 
   const monthsDiff =
     (targetDate.getFullYear() - startDate.getFullYear()) * 12 +
     (targetDate.getMonth() - startDate.getMonth());
 
-  if (monthsDiff <= 0) return value;
+  if (monthsDiff <= 0) return pension.amount;
 
-  const monthlyRate = startEntry.interestRate / 100 / 12;
+  let value = pension.amount;
+  const monthlyRate = pension.interestRate / 100 / 12;
 
-  // Get monthly contributions from both people
-  const getMonthlyContribution = (person: IncomeState, year: string) => {
+  // Get monthly work contributions if this is the active pension
+  const getMonthlyWorkContribution = (year: string) => {
+    if (!includeWorkContributions) return 0;
     const data = person.yearlyData[year];
     if (!data) return 0;
     const employeeMonthly =
@@ -464,16 +424,43 @@ const calculatePensionValue = (
         : currentDate.getFullYear() - 1;
     const taxYear = TAX_YEARS.find((ty) => ty.startsWith(year.toString()));
 
-    const contribution1 = taxYear
-      ? getMonthlyContribution(person1, taxYear)
-      : 0;
-    const contribution2 =
-      numPeople === 2 && taxYear ? getMonthlyContribution(person2, taxYear) : 0;
-
-    value = value * (1 + monthlyRate) + contribution1 + contribution2;
+    const contribution = taxYear ? getMonthlyWorkContribution(taxYear) : 0;
+    value = value * (1 + monthlyRate) + contribution;
   }
 
   return Math.max(0, value);
+};
+
+// Get total projected pension value for a person
+const getTotalProjectedPensions = (
+  person: IncomeState,
+  targetYear: string,
+): number => {
+  return person.pensions.reduce((total, pension) => {
+    const includeWorkContributions = pension.isActive;
+    return (
+      total +
+      calculateSinglePensionValue(
+        pension,
+        person,
+        targetYear,
+        includeWorkContributions,
+      )
+    );
+  }, 0);
+};
+
+// Calculate combined pension value for both people
+const calculatePensionValue = (
+  person1: IncomeState,
+  person2: IncomeState,
+  numPeople: number,
+  targetYear: string,
+): number => {
+  const p1Total = getTotalProjectedPensions(person1, targetYear);
+  const p2Total =
+    numPeople === 2 ? getTotalProjectedPensions(person2, targetYear) : 0;
+  return p1Total + p2Total;
 };
 
 // Calculate projected savings value for a specific account at start of a given year
@@ -508,16 +495,15 @@ const getTotalProjectedSavings = (
   person: IncomeState,
   year: string,
 ): number => {
-  const yearlyData = person.yearlyData[year];
-  if (!yearlyData) return 0;
-
-  return yearlyData.savings.reduce((total, account) => {
+  return person.savings.reduce((total: number, account: SavingsAccount) => {
     return total + calculateSavingsAccountValue(account, year);
   }, 0);
 };
 
 const initialIncomeState = (defaultName: string): IncomeState => ({
   name: defaultName,
+  savings: [],
+  pensions: [],
   yearlyData: TAX_YEARS.reduce(
     (acc, year) => ({
       ...acc,
@@ -585,6 +571,8 @@ export function SalaryCalculator() {
         const mergeData = (prev: IncomeState, newData: any) => ({
           ...prev,
           name: newData.name || prev.name,
+          savings: newData.savings || prev.savings,
+          pensions: newData.pensions || prev.pensions,
           yearlyData: {
             ...prev.yearlyData,
             ...(newData.yearlyData || {}),
@@ -709,7 +697,6 @@ export function SalaryCalculator() {
       employeePensionPercent: prevData.employeePensionPercent,
       employerPensionPercent: prevData.employerPensionPercent,
       bonuses: copyArrayWithNewIds(prevData.bonuses),
-      savings: copyArrayWithNewIds(prevData.savings),
       sacrifices: copyArrayWithNewIds(prevData.sacrifices),
       mortgage: {
         entries: prevData.mortgage?.entries
@@ -745,17 +732,20 @@ export function SalaryCalculator() {
     else setPerson2((prev) => ({ ...prev, name }));
   };
 
+  const updatePersonSavings = (personNum: 1 | 2, savings: SavingsAccount[]) => {
+    if (personNum === 1) setPerson1((prev) => ({ ...prev, savings }));
+    else setPerson2((prev) => ({ ...prev, savings }));
+  };
+
+  const updatePersonPensions = (personNum: 1 | 2, pensions: PensionEntry[]) => {
+    if (personNum === 1) setPerson1((prev) => ({ ...prev, pensions }));
+    else setPerson2((prev) => ({ ...prev, pensions }));
+  };
+
   const calculateBonusAmount = (bonus: Bonus, baseSalary: number) => {
     return bonus.type === "percentage"
       ? (baseSalary * bonus.value) / 100
       : bonus.value;
-  };
-
-  const calculateSavingsInterest = (yearlyData: YearlyIncomeData) => {
-    return yearlyData.savings.reduce(
-      (sum, s) => sum + (s.balance * s.interestRate) / 100,
-      0,
-    );
   };
 
   const calculateTotalGross = (yearlyData: YearlyIncomeData) => {
@@ -763,12 +753,7 @@ export function SalaryCalculator() {
       (sum, b) => sum + calculateBonusAmount(b, yearlyData.baseSalary),
       0,
     );
-    return (
-      yearlyData.baseSalary +
-      totalBonuses +
-      yearlyData.carAllowance +
-      calculateSavingsInterest(yearlyData)
-    );
+    return yearlyData.baseSalary + totalBonuses + yearlyData.carAllowance;
   };
 
   const calculateYearlyPensionContribution = (yearlyData: YearlyIncomeData) => {
@@ -833,7 +818,6 @@ export function SalaryCalculator() {
     const adjustedData = { ...data, baseSalary: adjustedBaseSalary };
     const totalGross = calculateTotalGross(adjustedData);
     const pensionInfo = calculateYearlyPensionContribution(data);
-    const savingsInterest = calculateSavingsInterest(data);
     const salarySacrifices = data.sacrifices
       .filter((s) => s.type !== "charity")
       .reduce((sum, s) => sum + s.amount, 0);
@@ -869,7 +853,7 @@ export function SalaryCalculator() {
     }
 
     let ni = 0;
-    const niable = totalGross - salarySacrifices - savingsInterest;
+    const niable = totalGross - salarySacrifices;
     if (niable > config.niPt) {
       ni +=
         Math.min(niable - config.niPt, config.niUel - config.niPt) *
@@ -931,7 +915,7 @@ export function SalaryCalculator() {
     }
 
     let baselineNI = 0;
-    const baselineNIable = totalGross - savingsInterest;
+    const baselineNIable = totalGross;
     if (baselineNIable > config.niPt) {
       baselineNI +=
         Math.min(baselineNIable - config.niPt, config.niUel - config.niPt) *
@@ -956,7 +940,6 @@ export function SalaryCalculator() {
         pensionInfo.total > config.pensionAllowance + carryForward,
       carryForward,
       carryForwardBreakdown: breakdown,
-      interest: savingsInterest,
       grossSalary: totalGross,
       baselineTakeHome,
       maternityPay,
@@ -1411,6 +1394,718 @@ export function SalaryCalculator() {
                 onCopyExpenses={() => copyPreviousYearExpenses(2, selectedYear)}
                 onCopyIncome={() => copyPreviousYearIncome(2, selectedYear)}
               />
+            )}
+          </div>
+
+          <div
+            className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+          >
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">
+                  {person1.name} - Savings Accounts
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ListSection
+                  title="Savings Accounts"
+                  items={person1.savings}
+                  onAdd={() => {
+                    const today = new Date()
+                      .toISOString()
+                      .split("T")[0] as string;
+                    updatePersonSavings(1, [
+                      ...person1.savings,
+                      {
+                        id: crypto.randomUUID(),
+                        name: "Savings",
+                        balance: 0,
+                        interestRate: 0,
+                        accountType: "normal",
+                        monthlyContribution: 0,
+                        date: today,
+                      },
+                    ]);
+                  }}
+                  onRemove={(id: string) =>
+                    updatePersonSavings(
+                      1,
+                      person1.savings.filter((s) => s.id !== id),
+                    )
+                  }
+                  onUpdateItem={(id: string, upd: any) =>
+                    updatePersonSavings(
+                      1,
+                      person1.savings.map((s) =>
+                        s.id === id ? { ...s, ...upd } : s,
+                      ),
+                    )
+                  }
+                  renderItem={(item: any, updateItem: any) => {
+                    const projectedValue = calculateSavingsAccountValue(
+                      item,
+                      selectedYear,
+                    );
+                    return (
+                      <div className="space-y-2 w-full">
+                        <div className="flex gap-2 w-full">
+                          <Input
+                            className="h-8 flex-1 text-xs"
+                            value={item.name}
+                            onChange={(e) =>
+                              updateItem({ name: e.target.value })
+                            }
+                          />
+                          <Select
+                            value={item.accountType || "normal"}
+                            onValueChange={(v: any) =>
+                              updateItem({ accountType: v })
+                            }
+                          >
+                            <SelectTrigger className="h-8 w-20 text-[10px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="lisa">LISA</SelectItem>
+                              <SelectItem value="isa">ISA</SelectItem>
+                              <SelectItem value="normal">Normal</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex gap-2 w-full">
+                          <Input
+                            type="date"
+                            className="h-8 w-32 text-xs"
+                            value={item.date || ""}
+                            onChange={(e) =>
+                              updateItem({ date: e.target.value })
+                            }
+                          />
+                          <Input
+                            type="number"
+                            placeholder="Balance"
+                            className="h-8 w-24 text-xs"
+                            value={item.balance || ""}
+                            onChange={(e) =>
+                              updateItem({ balance: Number(e.target.value) })
+                            }
+                          />
+                          <Input
+                            type="number"
+                            placeholder="Rate %"
+                            className="h-8 w-20 text-xs"
+                            value={item.interestRate || ""}
+                            onChange={(e) =>
+                              updateItem({
+                                interestRate: Number(e.target.value),
+                              })
+                            }
+                          />
+                          <Input
+                            type="number"
+                            placeholder="Monthly £"
+                            className="h-8 w-24 text-xs"
+                            value={item.monthlyContribution || ""}
+                            onChange={(e) =>
+                              updateItem({
+                                monthlyContribution: Number(e.target.value),
+                              })
+                            }
+                          />
+                        </div>
+                        {item.date && (
+                          <div className="text-[10px] text-muted-foreground">
+                            Projected value at start of {selectedYear}: £
+                            {projectedValue.toLocaleString("en-GB", {
+                              maximumFractionDigits: 0,
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                {person1.savings.length > 0 && (
+                  <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground">
+                      Projected Savings for {selectedYear}
+                    </div>
+                    {person1.savings.map((account: SavingsAccount) => {
+                      const projectedValue = calculateSavingsAccountValue(
+                        account,
+                        selectedYear,
+                      );
+                      return (
+                        <div
+                          key={account.id}
+                          className="flex justify-between text-xs"
+                        >
+                          <span className="text-muted-foreground">
+                            {account.name} ({account.accountType.toUpperCase()}
+                            ):
+                          </span>
+                          <span className="font-semibold">
+                            £
+                            {projectedValue.toLocaleString("en-GB", {
+                              maximumFractionDigits: 0,
+                            })}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
+                      <span>Total Savings:</span>
+                      <span className="text-blue-600">
+                        £
+                        {getTotalProjectedSavings(
+                          person1,
+                          selectedYear,
+                        ).toLocaleString("en-GB", {
+                          maximumFractionDigits: 0,
+                        })}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground italic">
+                      Includes interest and monthly contributions
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            {numPeople === 2 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">
+                    {person2.name} - Savings Accounts
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ListSection
+                    title="Savings Accounts"
+                    items={person2.savings}
+                    onAdd={() => {
+                      const today = new Date()
+                        .toISOString()
+                        .split("T")[0] as string;
+                      updatePersonSavings(2, [
+                        ...person2.savings,
+                        {
+                          id: crypto.randomUUID(),
+                          name: "Savings",
+                          balance: 0,
+                          interestRate: 0,
+                          accountType: "normal",
+                          monthlyContribution: 0,
+                          date: today,
+                        },
+                      ]);
+                    }}
+                    onRemove={(id: string) =>
+                      updatePersonSavings(
+                        2,
+                        person2.savings.filter((s) => s.id !== id),
+                      )
+                    }
+                    onUpdateItem={(id: string, upd: any) =>
+                      updatePersonSavings(
+                        2,
+                        person2.savings.map((s) =>
+                          s.id === id ? { ...s, ...upd } : s,
+                        ),
+                      )
+                    }
+                    renderItem={(item: any, updateItem: any) => {
+                      const projectedValue = calculateSavingsAccountValue(
+                        item,
+                        selectedYear,
+                      );
+                      return (
+                        <div className="space-y-2 w-full">
+                          <div className="flex gap-2 w-full">
+                            <Input
+                              className="h-8 flex-1 text-xs"
+                              value={item.name}
+                              onChange={(e) =>
+                                updateItem({ name: e.target.value })
+                              }
+                            />
+                            <Select
+                              value={item.accountType || "normal"}
+                              onValueChange={(v: any) =>
+                                updateItem({ accountType: v })
+                              }
+                            >
+                              <SelectTrigger className="h-8 w-20 text-[10px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="lisa">LISA</SelectItem>
+                                <SelectItem value="isa">ISA</SelectItem>
+                                <SelectItem value="normal">Normal</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="flex gap-2 w-full">
+                            <Input
+                              type="date"
+                              className="h-8 w-32 text-xs"
+                              value={item.date || ""}
+                              onChange={(e) =>
+                                updateItem({ date: e.target.value })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Balance"
+                              className="h-8 w-24 text-xs"
+                              value={item.balance || ""}
+                              onChange={(e) =>
+                                updateItem({ balance: Number(e.target.value) })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Rate %"
+                              className="h-8 w-20 text-xs"
+                              value={item.interestRate || ""}
+                              onChange={(e) =>
+                                updateItem({
+                                  interestRate: Number(e.target.value),
+                                })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Monthly £"
+                              className="h-8 w-24 text-xs"
+                              value={item.monthlyContribution || ""}
+                              onChange={(e) =>
+                                updateItem({
+                                  monthlyContribution: Number(e.target.value),
+                                })
+                              }
+                            />
+                          </div>
+                          {item.date && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Projected value at start of {selectedYear}: £
+                              {projectedValue.toLocaleString("en-GB", {
+                                maximumFractionDigits: 0,
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }}
+                  />
+                  {person2.savings.length > 0 && (
+                    <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-2">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Projected Savings for {selectedYear}
+                      </div>
+                      {person2.savings.map((account: SavingsAccount) => {
+                        const projectedValue = calculateSavingsAccountValue(
+                          account,
+                          selectedYear,
+                        );
+                        return (
+                          <div
+                            key={account.id}
+                            className="flex justify-between text-xs"
+                          >
+                            <span className="text-muted-foreground">
+                              {account.name} (
+                              {account.accountType.toUpperCase()}):
+                            </span>
+                            <span className="font-semibold">
+                              £
+                              {projectedValue.toLocaleString("en-GB", {
+                                maximumFractionDigits: 0,
+                              })}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
+                        <span>Total Savings:</span>
+                        <span className="text-blue-600">
+                          £
+                          {getTotalProjectedSavings(
+                            person2,
+                            selectedYear,
+                          ).toLocaleString("en-GB", {
+                            maximumFractionDigits: 0,
+                          })}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground italic">
+                        Includes interest and monthly contributions
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          <div
+            className={`grid gap-8 ${numPeople === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}
+          >
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">
+                  {person1.name} - Pension Accounts
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ListSection
+                  title="Pension Accounts"
+                  items={person1.pensions}
+                  onAdd={() => {
+                    const today = new Date()
+                      .toISOString()
+                      .split("T")[0] as string;
+                    const isFirstPension = person1.pensions.length === 0;
+                    updatePersonPensions(1, [
+                      ...person1.pensions,
+                      {
+                        id: crypto.randomUUID(),
+                        name: "Pension",
+                        date: today,
+                        amount: 0,
+                        interestRate: 0,
+                        isActive: isFirstPension,
+                      },
+                    ]);
+                  }}
+                  onRemove={(id: string) =>
+                    updatePersonPensions(
+                      1,
+                      person1.pensions.filter((p) => p.id !== id),
+                    )
+                  }
+                  onUpdateItem={(id: string, upd: any) =>
+                    updatePersonPensions(
+                      1,
+                      person1.pensions.map((p) =>
+                        p.id === id ? { ...p, ...upd } : p,
+                      ),
+                    )
+                  }
+                  renderItem={(item: any, updateItem: any) => {
+                    const projectedValue = calculateSinglePensionValue(
+                      item,
+                      person1,
+                      selectedYear,
+                      item.isActive,
+                    );
+                    return (
+                      <div className="space-y-2 w-full">
+                        <div className="flex gap-2 w-full items-center">
+                          <Input
+                            className="h-8 flex-1 text-xs"
+                            value={item.name}
+                            onChange={(e) =>
+                              updateItem({ name: e.target.value })
+                            }
+                          />
+                          <Button
+                            size="sm"
+                            variant={item.isActive ? "default" : "outline"}
+                            className="h-8 text-xs"
+                            onClick={() => {
+                              updatePersonPensions(
+                                1,
+                                person1.pensions.map((p) => ({
+                                  ...p,
+                                  isActive: p.id === item.id,
+                                })),
+                              );
+                            }}
+                          >
+                            {item.isActive ? "Active" : "Set Active"}
+                          </Button>
+                        </div>
+                        <div className="flex gap-2 w-full">
+                          <Input
+                            type="date"
+                            className="h-8 w-32 text-xs"
+                            value={item.date || ""}
+                            onChange={(e) =>
+                              updateItem({ date: e.target.value })
+                            }
+                          />
+                          <Input
+                            type="number"
+                            placeholder="Balance"
+                            className="h-8 w-24 text-xs"
+                            value={item.amount || ""}
+                            onChange={(e) =>
+                              updateItem({ amount: Number(e.target.value) })
+                            }
+                          />
+                          <Input
+                            type="number"
+                            placeholder="Rate %"
+                            className="h-8 w-20 text-xs"
+                            value={item.interestRate || ""}
+                            onChange={(e) =>
+                              updateItem({
+                                interestRate: Number(e.target.value),
+                              })
+                            }
+                          />
+                        </div>
+                        {item.date && (
+                          <div className="text-[10px] text-muted-foreground">
+                            Projected value at start of {selectedYear}: £
+                            {projectedValue.toLocaleString("en-GB", {
+                              maximumFractionDigits: 0,
+                            })}
+                            {item.isActive && (
+                              <span className="ml-2 text-blue-600 font-semibold">
+                                (includes work contributions)
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+                {person1.pensions.length > 0 && (
+                  <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground">
+                      Projected Pensions for {selectedYear}
+                    </div>
+                    {person1.pensions.map((pension: PensionEntry) => {
+                      const projectedValue = calculateSinglePensionValue(
+                        pension,
+                        person1,
+                        selectedYear,
+                        pension.isActive,
+                      );
+                      return (
+                        <div
+                          key={pension.id}
+                          className="flex justify-between text-xs"
+                        >
+                          <span className="text-muted-foreground">
+                            {pension.name}
+                            {pension.isActive && (
+                              <span className="ml-1 text-blue-600 font-semibold">
+                                (Active)
+                              </span>
+                            )}
+                            :
+                          </span>
+                          <span className="font-semibold">
+                            £
+                            {projectedValue.toLocaleString("en-GB", {
+                              maximumFractionDigits: 0,
+                            })}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
+                      <span>Total Pensions:</span>
+                      <span className="text-blue-600">
+                        £
+                        {getTotalProjectedPensions(
+                          person1,
+                          selectedYear,
+                        ).toLocaleString("en-GB", {
+                          maximumFractionDigits: 0,
+                        })}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground italic">
+                      Active pension receives employer/employee contributions
+                      and pension sacrifices
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            {numPeople === 2 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">
+                    {person2.name} - Pension Accounts
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ListSection
+                    title="Pension Accounts"
+                    items={person2.pensions}
+                    onAdd={() => {
+                      const today = new Date()
+                        .toISOString()
+                        .split("T")[0] as string;
+                      const isFirstPension = person2.pensions.length === 0;
+                      updatePersonPensions(2, [
+                        ...person2.pensions,
+                        {
+                          id: crypto.randomUUID(),
+                          name: "Pension",
+                          date: today,
+                          amount: 0,
+                          interestRate: 0,
+                          isActive: isFirstPension,
+                        },
+                      ]);
+                    }}
+                    onRemove={(id: string) =>
+                      updatePersonPensions(
+                        2,
+                        person2.pensions.filter((p) => p.id !== id),
+                      )
+                    }
+                    onUpdateItem={(id: string, upd: any) =>
+                      updatePersonPensions(
+                        2,
+                        person2.pensions.map((p) =>
+                          p.id === id ? { ...p, ...upd } : p,
+                        ),
+                      )
+                    }
+                    renderItem={(item: any, updateItem: any) => {
+                      const projectedValue = calculateSinglePensionValue(
+                        item,
+                        person2,
+                        selectedYear,
+                        item.isActive,
+                      );
+                      return (
+                        <div className="space-y-2 w-full">
+                          <div className="flex gap-2 w-full items-center">
+                            <Input
+                              className="h-8 flex-1 text-xs"
+                              value={item.name}
+                              onChange={(e) =>
+                                updateItem({ name: e.target.value })
+                              }
+                            />
+                            <Button
+                              size="sm"
+                              variant={item.isActive ? "default" : "outline"}
+                              className="h-8 text-xs"
+                              onClick={() => {
+                                updatePersonPensions(
+                                  2,
+                                  person2.pensions.map((p) => ({
+                                    ...p,
+                                    isActive: p.id === item.id,
+                                  })),
+                                );
+                              }}
+                            >
+                              {item.isActive ? "Active" : "Set Active"}
+                            </Button>
+                          </div>
+                          <div className="flex gap-2 w-full">
+                            <Input
+                              type="date"
+                              className="h-8 w-32 text-xs"
+                              value={item.date || ""}
+                              onChange={(e) =>
+                                updateItem({ date: e.target.value })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Balance"
+                              className="h-8 w-24 text-xs"
+                              value={item.amount || ""}
+                              onChange={(e) =>
+                                updateItem({ amount: Number(e.target.value) })
+                              }
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Rate %"
+                              className="h-8 w-20 text-xs"
+                              value={item.interestRate || ""}
+                              onChange={(e) =>
+                                updateItem({
+                                  interestRate: Number(e.target.value),
+                                })
+                              }
+                            />
+                          </div>
+                          {item.date && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Projected value at start of {selectedYear}: £
+                              {projectedValue.toLocaleString("en-GB", {
+                                maximumFractionDigits: 0,
+                              })}
+                              {item.isActive && (
+                                <span className="ml-2 text-blue-600 font-semibold">
+                                  (includes work contributions)
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }}
+                  />
+                  {person2.pensions.length > 0 && (
+                    <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-2">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Projected Pensions for {selectedYear}
+                      </div>
+                      {person2.pensions.map((pension: PensionEntry) => {
+                        const projectedValue = calculateSinglePensionValue(
+                          pension,
+                          person2,
+                          selectedYear,
+                          pension.isActive,
+                        );
+                        return (
+                          <div
+                            key={pension.id}
+                            className="flex justify-between text-xs"
+                          >
+                            <span className="text-muted-foreground">
+                              {pension.name}
+                              {pension.isActive && (
+                                <span className="ml-1 text-blue-600 font-semibold">
+                                  (Active)
+                                </span>
+                              )}
+                              :
+                            </span>
+                            <span className="font-semibold">
+                              £
+                              {projectedValue.toLocaleString("en-GB", {
+                                maximumFractionDigits: 0,
+                              })}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
+                        <span>Total Pensions:</span>
+                        <span className="text-blue-600">
+                          £
+                          {getTotalProjectedPensions(
+                            person2,
+                            selectedYear,
+                          ).toLocaleString("en-GB", {
+                            maximumFractionDigits: 0,
+                          })}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground italic">
+                        Active pension receives employer/employee contributions
+                        and pension sacrifices
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
           </div>
 
@@ -2606,111 +3301,6 @@ function PersonForm({
           )}
         />
         <ListSection
-          title="Savings"
-          items={yearlyData.savings}
-          onAdd={() => {
-            const today = new Date().toISOString().split("T")[0] as string;
-            onUpdate({
-              savings: [
-                ...yearlyData.savings,
-                {
-                  id: crypto.randomUUID(),
-                  name: "Savings",
-                  balance: 0,
-                  interestRate: 0,
-                  accountType: "normal",
-                  monthlyContribution: 0,
-                  date: today,
-                },
-              ],
-            });
-          }}
-          onRemove={(id: string) =>
-            onUpdate({
-              savings: yearlyData.savings.filter((s: any) => s.id !== id),
-            })
-          }
-          onUpdateItem={(id: string, upd: any) =>
-            onUpdate({
-              savings: yearlyData.savings.map((s: any) =>
-                s.id === id ? { ...s, ...upd } : s,
-              ),
-            })
-          }
-          renderItem={(item: any, updateItem: any) => {
-            const projectedValue = calculateSavingsAccountValue(item, year);
-            return (
-              <div className="space-y-2 w-full">
-                <div className="flex gap-2 w-full">
-                  <Input
-                    className="h-8 flex-1 text-xs"
-                    value={item.name}
-                    onChange={(e) => updateItem({ name: e.target.value })}
-                  />
-                  <Select
-                    value={item.accountType || "normal"}
-                    onValueChange={(v: any) => updateItem({ accountType: v })}
-                  >
-                    <SelectTrigger className="h-8 w-20 text-[10px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="lisa">LISA</SelectItem>
-                      <SelectItem value="isa">ISA</SelectItem>
-                      <SelectItem value="normal">Normal</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex gap-2 w-full">
-                  <Input
-                    type="date"
-                    className="h-8 w-32 text-xs"
-                    value={item.date || ""}
-                    onChange={(e) => updateItem({ date: e.target.value })}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Balance"
-                    className="h-8 w-24 text-xs"
-                    value={item.balance || ""}
-                    onChange={(e) =>
-                      updateItem({ balance: Number(e.target.value) })
-                    }
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Rate %"
-                    className="h-8 w-20 text-xs"
-                    value={item.interestRate || ""}
-                    onChange={(e) =>
-                      updateItem({ interestRate: Number(e.target.value) })
-                    }
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Monthly £"
-                    className="h-8 w-24 text-xs"
-                    value={item.monthlyContribution || ""}
-                    onChange={(e) =>
-                      updateItem({
-                        monthlyContribution: Number(e.target.value),
-                      })
-                    }
-                  />
-                </div>
-                {item.date && (
-                  <div className="text-[10px] text-muted-foreground">
-                    Projected value at start of {year}: £
-                    {projectedValue.toLocaleString("en-GB", {
-                      maximumFractionDigits: 0,
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          }}
-        />
-        <ListSection
           title="Sacrifices"
           items={yearlyData.sacrifices}
           onAdd={() =>
@@ -2994,94 +3584,6 @@ function PersonForm({
             <div className="text-[10px] text-muted-foreground italic">
               Based on most recent entry from{" "}
               {new Date(mostRecentEntry.date).toLocaleDateString("en-GB")}
-            </div>
-          </div>
-        )}
-        <ListSection
-          title="Pension Pot Entries"
-          items={yearlyData.pension?.entries || []}
-          onAdd={() => {
-            const today = new Date().toISOString().split("T")[0] as string;
-            const newEntry: PensionEntry = {
-              id: crypto.randomUUID(),
-              date: today,
-              amount: 0,
-              interestRate: 0,
-            };
-            onUpdate({
-              pension: {
-                entries: [...(yearlyData.pension?.entries || []), newEntry],
-              },
-            });
-          }}
-          onRemove={(id: string) =>
-            onUpdate({
-              pension: {
-                entries: (yearlyData.pension?.entries || []).filter(
-                  (e: any) => e.id !== id,
-                ),
-              },
-            })
-          }
-          onUpdateItem={(id: string, upd: any) =>
-            onUpdate({
-              pension: {
-                entries: (yearlyData.pension?.entries || []).map((e: any) =>
-                  e.id === id ? { ...e, ...upd } : e,
-                ),
-              },
-            })
-          }
-          renderItem={(item: any, updateItem: any) => (
-            <div className="flex flex-wrap gap-3 w-full items-end">
-              <Input
-                type="date"
-                className="h-8 w-32 text-xs"
-                value={item.date || ""}
-                onChange={(e) => updateItem({ date: e.target.value })}
-              />
-              <Input
-                type="number"
-                placeholder="Amount £"
-                className="h-8 w-28 text-xs"
-                value={item.amount || ""}
-                onChange={(e) => updateItem({ amount: Number(e.target.value) })}
-              />
-              <Input
-                type="number"
-                placeholder="Rate %"
-                className="h-8 w-20 text-xs"
-                value={item.interestRate || ""}
-                onChange={(e) =>
-                  updateItem({ interestRate: Number(e.target.value) })
-                }
-              />
-            </div>
-          )}
-        />
-        {getMostRecentPensionEntry(personNum === 1 ? person1 : person2) && (
-          <div className="mt-3 p-3 bg-muted/50 rounded-md space-y-1">
-            <div className="text-xs font-semibold text-muted-foreground">
-              Projected Pension Value for {year}
-            </div>
-            <div className="text-xs">
-              <span className="text-muted-foreground">
-                Estimated Value (incl. contributions):
-              </span>
-              <span className="ml-2 font-semibold">
-                £
-                {calculatePensionValue(
-                  person1,
-                  person2,
-                  numPeople,
-                  year,
-                ).toLocaleString("en-GB", {
-                  maximumFractionDigits: 0,
-                })}
-              </span>
-            </div>
-            <div className="text-[10px] text-muted-foreground italic">
-              Includes employer/employee contributions and growth
             </div>
           </div>
         )}
